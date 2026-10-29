@@ -88,6 +88,9 @@ class HostTable(
         private set
     var bt: BtServer? = null
         private set
+    /** Tên Bluetooth của máy chủ bàn, gửi trong tín hiệu Wi‑Fi để khách gộp hai đường làm một. */
+    var btName: String? = null
+    var btVisibleUntil = 0L
 
     private var engine: Engine? = null
     private var deadline = 0L
@@ -196,6 +199,7 @@ class HostTable(
             .put("game", gameId)
             .put("players", seats.count { it.kind == SeatKind.LOCAL || it.kind == SeatKind.REMOTE })
             .put("max", seats.size)
+            .put("bt", if (bt != null) (btName ?: "") else "")
             .toString()
     }
 
@@ -328,7 +332,8 @@ class HostTable(
             .put("wins", s.wins)
             .put("net", s.net))
         o.put("seats", sa)
-        if (v == 0) o.put("wifi", wifi != null).put("bt", bt != null)
+        if (v == 0) o.put("wifi", wifi != null).put("bt", bt != null).put("btName", btName ?: "")
+            .put("btVisible", System.currentTimeMillis() < btVisibleUntil)
         val e = engine
         if (e != null && phase != "lobby") {
             val gv = e.view(v)

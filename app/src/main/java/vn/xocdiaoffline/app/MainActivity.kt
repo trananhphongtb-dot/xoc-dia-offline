@@ -39,6 +39,7 @@ import vn.xocdiaoffline.app.net.WifiFinder
 import vn.xocdiaoffline.app.net.connectBt
 import vn.xocdiaoffline.app.net.connectWifi
 import vn.xocdiaoffline.app.net.localIps
+import vn.xocdiaoffline.app.net.mainHandler
 import vn.xocdiaoffline.app.table.ClientTable
 import vn.xocdiaoffline.app.table.GameInfo
 import vn.xocdiaoffline.app.table.HostTable
@@ -423,14 +424,24 @@ class MainActivity : Activity() {
         val h = HostTable(this, gameId, solo)
         if (!solo && !h.startWifi()) toast("Không mở được cổng Wi‑Fi, bạn vẫn có thể mở bàn bằng Bluetooth")
         enterTable(h)
-        if (solo) h.act(act("start")) else h.broadcast()
+        if (solo) h.act(act("start")) else { h.broadcast(); openBtHosting() }
     }
 
     // ================================================================ VÀO BÀN
+    private var joinWifi: List<FoundTable> = emptyList()
+    private val joinBt = LinkedHashMap<String, Pair<BluetoothDevice, String>>()
+    private var joinList: LinearLayout? = null
+    private var joinStatus: TextView? = null
+    private var joinBtButton: View? = null
+    private var joinGameId = ""
+    private var btScanning = false
+
     private fun showJoin(gameId: String) {
         stopFinders()
         screen = "join"
+        joinGameId = gameId
         startPresence()
+        joinWifi = emptyList(); joinBt.clear()
         val scroll = ScrollView(this)
         feltBackground(scroll)
         val root = Ui.col(this)
@@ -440,59 +451,111 @@ class MainActivity : Activity() {
 
         val header = Ui.row(this)
         header.addView(Ui.button(this, "← Quay lại", Color.parseColor("#55000000"), Color.WHITE, 14f) { showHome() })
-        header.addView(Ui.text(this, "  Vào bàn ${GameInfo.title(gameId)}", 20f, Ui.GOLD, true))
+        header.addView(Ui.text(this, "  Vào bàn ${GameInfo.title(gameId)}", 20f, Ui.GOLD, true), Ui.lp(0, Ui.WRAP, 1f))
+        header.addView(Ui.button(this, "Nhập IP", Color.parseColor("#33FFFFFF"), Color.WHITE, 13f) { askIp(gameId) })
         root.addView(header)
-        root.addView(Ui.spacer(this, 12))
+        root.addView(Ui.spacer(this, 10))
 
-        val cols = Ui.row(this).apply { gravity = Gravity.TOP }
-        root.addView(cols, Ui.lp(Ui.MATCH, Ui.WRAP))
-
-        // --- Wi‑Fi
-        val wifiCol = Ui.col(this).apply {
+        val panel = Ui.col(this).apply {
             background = Ui.rounded(Ui.PANEL, Ui.dp(this@MainActivity, 14).toFloat())
             setPadding(pad, pad, pad, pad)
         }
-        wifiCol.addView(Ui.text(this, "📶 Qua Wi‑Fi", 18f, Color.WHITE, true))
-        wifiCol.addView(Ui.text(this, "Cùng một mạng Wi‑Fi, hoặc bắt Wi‑Fi điểm phát sóng của máy chủ bàn. Bàn sẽ tự hiện ở đây.", 12f, Ui.MUTED))
-        wifiCol.addView(Ui.spacer(this, 8))
-        val wifiList = Ui.col(this)
-        val wifiEmpty = Ui.text(this, "Đang tìm bàn...", 14f, Ui.MUTED)
-        wifiCol.addView(wifiEmpty)
-        wifiCol.addView(wifiList)
-        wifiCol.addView(Ui.spacer(this, 8))
-        wifiCol.addView(Ui.button(this, "Nhập địa chỉ IP", Color.parseColor("#33FFFFFF"), Color.WHITE, 14f) { askIp(gameId) })
-        cols.addView(wifiCol, Ui.lp(0, Ui.WRAP, 1f, Ui.dp(this, 6)))
-
-        wifiFinder = WifiFinder(this) { list: List<FoundTable> ->
-            wifiList.removeAllViews()
-            val shown = list.filter { it.game == gameId }
-            wifiEmpty.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
-            for (t in shown) {
-                wifiList.addView(listRow("${t.name}", "${t.players}/${t.max} người · ${t.ip}") {
-                    showProgress("Đang vào bàn...")
-                    connectWifi(t.ip) { c, err -> hideProgress(); if (c != null) joinWith(c, gameId) else toast(err ?: "Lỗi") }
-                })
-            }
-        }.also { it.start() }
-
-        // --- Bluetooth
-        val btCol = Ui.col(this).apply {
-            background = Ui.rounded(Ui.PANEL, Ui.dp(this@MainActivity, 14).toFloat())
-            setPadding(pad, pad, pad, pad)
-        }
-        btCol.addView(Ui.text(this, "🔵 Qua Bluetooth", 18f, Color.WHITE, true))
-        btCol.addView(Ui.text(this, "Máy chủ bàn bấm \"Mở Bluetooth\" trong phòng chờ, rồi bạn bấm Dò tìm và chọn tên máy đó.", 12f, Ui.MUTED))
-        btCol.addView(Ui.spacer(this, 8))
-        val btList = Ui.col(this)
-        val btStatus = Ui.text(this, "", 13f, Ui.MUTED)
-        btCol.addView(Ui.button(this, "Dò tìm thiết bị Bluetooth", Ui.BLUE, Color.WHITE, 14f) {
-            withBluetooth { ad -> startBtScan(ad, btList, btStatus, gameId) }
-        })
-        btCol.addView(btStatus)
-        btCol.addView(btList)
-        cols.addView(btCol, Ui.lp(0, Ui.WRAP, 1f, Ui.dp(this, 6)))
-
+        panel.addView(Ui.text(this, "Các bàn ở gần", 18f, Color.WHITE, true))
+        panel.addView(Ui.text(this, "📶 = Wi‑Fi (nhanh, ổn định, ưu tiên)   ·   🔵 = Bluetooth", 12f, Ui.MUTED))
+        val status = Ui.text(this, "Đang tìm bàn qua Wi‑Fi và Bluetooth...", 13f, Ui.GOLD)
+        panel.addView(status)
+        val btBtn = Ui.button(this, "🔵 Bật Bluetooth để tìm thêm bàn", Ui.BLUE, Color.WHITE, 13f) { startJoinBt() }
+        btBtn.visibility = View.GONE
+        panel.addView(btBtn, Ui.lp(Ui.WRAP, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 6) })
+        val list = Ui.col(this)
+        panel.addView(list, Ui.lp(Ui.MATCH, Ui.WRAP))
+        root.addView(panel, Ui.lp(Ui.MATCH, Ui.WRAP))
+        root.addView(Ui.spacer(this, 8))
+        root.addView(Ui.text(this, "Không thấy bàn? Cùng bắt một mạng Wi‑Fi (hoặc bắt điểm phát sóng của máy chủ bàn), hoặc đứng gần máy chủ bàn để dò Bluetooth.", 12f, Ui.MUTED))
+        joinList = list; joinStatus = status; joinBtButton = btBtn
         setContentView(scroll)
+
+        wifiFinder = WifiFinder(this) { l -> joinWifi = l; renderJoin() }.also { it.start() }
+        startJoinBt()
+        renderJoin()
+    }
+
+    private fun startJoinBt() {
+        if (btAdapter == null) return
+        withBluetooth { ad ->
+            if (screen != "join") return@withBluetooth
+            joinBtButton?.visibility = View.GONE
+            startBtScan(ad)
+        }
+        // Nếu người dùng từ chối, hiện nút để bật lại
+        mainHandler.postDelayed({ if (screen == "join" && !btScanning) joinBtButton?.visibility = View.VISIBLE }, 4000)
+    }
+
+    /** Bluetooth: chỉ lấy điện thoại / máy tính bảng (bỏ tai nghe, loa...). */
+    private fun looksLikePhone(d: BluetoothDevice): Boolean = try {
+        when (d.bluetoothClass?.majorDeviceClass) {
+            null, android.bluetooth.BluetoothClass.Device.Major.PHONE,
+            android.bluetooth.BluetoothClass.Device.Major.COMPUTER,
+            android.bluetooth.BluetoothClass.Device.Major.UNCATEGORIZED -> true
+            else -> false
+        }
+    } catch (_: Exception) { true }
+
+    private fun renderJoin() {
+        val list = joinList ?: return
+        list.removeAllViews()
+        val gameId = joinGameId
+        val btByName = joinBt.values.associateBy({ it.second }, { it.first })
+        val usedBtNames = HashSet<String>()
+        var count = 0
+        // Bàn thấy qua Wi‑Fi (có thể kèm Bluetooth)
+        for (t in joinWifi) {
+            if (t.btName.isNotEmpty()) usedBtNames += t.btName
+            if (t.game != gameId) continue
+            val dev = if (t.btName.isNotEmpty()) btByName[t.btName] else null
+            val icons = if (t.btName.isNotEmpty()) "📶🔵" else "📶"
+            val sub = "${t.players}/${t.max} người · " + if (t.btName.isNotEmpty()) "Wi‑Fi (ưu tiên) + Bluetooth" else "Wi‑Fi"
+            list.addView(listRow("$icons  ${t.name}", sub) { tryJoin(t.ip, dev, t.name) })
+            count++
+        }
+        // Máy chỉ thấy qua Bluetooth
+        for ((dev, name) in joinBt.values) {
+            if (name in usedBtNames) continue
+            list.addView(listRow("🔵  $name", "Bluetooth · bấm để vào bàn trên máy này") { tryJoin(null, dev, name) })
+            count++
+        }
+        joinStatus?.text = when {
+            count > 0 -> "Bấm vào bàn muốn vào. Đang tiếp tục dò..."
+            btScanning -> "Đang tìm bàn qua Wi‑Fi và Bluetooth..."
+            else -> "Đang tìm bàn qua Wi‑Fi..."
+        }
+    }
+
+    /** Ưu tiên Wi‑Fi, không được thì tự chuyển sang Bluetooth. */
+    private fun tryJoin(ip: String?, dev: BluetoothDevice?, name: String) {
+        val gameId = joinGameId
+        val ad = btAdapter
+        fun viaBt() {
+            if (dev == null || ad == null) return
+            showProgress("Đang kết nối qua Bluetooth tới $name...")
+            stopBtScan()
+            connectBt(ad, dev) { c, err ->
+                hideProgress()
+                if (c != null) joinWith(c, gameId)
+                else { toast(err ?: "Lỗi"); if (screen == "join") startJoinBt() }
+            }
+        }
+        if (ip != null) {
+            showProgress("Đang vào bàn qua Wi‑Fi...")
+            connectWifi(ip) { c, err ->
+                hideProgress()
+                when {
+                    c != null -> joinWith(c, gameId)
+                    dev != null -> { toast("Wi‑Fi không kết nối được, chuyển sang Bluetooth"); viaBt() }
+                    else -> toast(err ?: "Lỗi")
+                }
+            }
+        } else viaBt()
     }
 
     private fun listRow(title: String, sub: String, onClick: () -> Unit): View {
@@ -522,20 +585,16 @@ class MainActivity : Activity() {
             }.setNegativeButton("Hủy", null).show()
     }
 
-    private fun startBtScan(ad: BluetoothAdapter, list: LinearLayout, status: TextView, gameId: String) {
+    /** Dò Bluetooth liên tục khi đang ở màn Vào bàn. */
+    private fun startBtScan(ad: BluetoothAdapter) {
         stopBtScan()
-        list.removeAllViews()
-        val seen = HashSet<String>()
         fun addDevice(d: BluetoothDevice) {
-            if (!seen.add(d.address)) return
+            if (!looksLikePhone(d)) return
             val name = try { d.name } catch (_: Exception) { null } ?: return
-            list.addView(listRow(name, d.address) {
-                stopBtScan()
-                showProgress("Đang kết nối tới $name...")
-                connectBt(ad, d) { c, err -> hideProgress(); if (c != null) joinWith(c, gameId) else toast(err ?: "Lỗi") }
-            })
+            if (joinBt.containsKey(d.address)) return
+            joinBt[d.address] = d to name
+            renderJoin()
         }
-        try { ad.bondedDevices?.forEach { addDevice(it) } } catch (_: Exception) { }
         val r = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, i: Intent) {
                 when (i.action) {
@@ -544,18 +603,22 @@ class MainActivity : Activity() {
                         val d = i.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                         if (d != null) addDevice(d)
                     }
-                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> status.text = "Đã dò xong. Không thấy máy chủ bàn thì bấm Dò tìm lại."
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> if (screen == "join" && btScanning) {
+                        mainHandler.postDelayed({ try { if (btScanning) ad.startDiscovery() } catch (_: Exception) { } }, 2000)
+                    }
                 }
             }
         }
         val f = IntentFilter().apply { addAction(BluetoothDevice.ACTION_FOUND); addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED) }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(r, f, Context.RECEIVER_EXPORTED) else registerReceiver(r, f)
         btReceiver = r
-        status.text = "Đang dò tìm (khoảng 12 giây)..."
-        try { ad.cancelDiscovery(); ad.startDiscovery() } catch (_: Exception) { status.text = "Không dò được, kiểm tra quyền và vị trí" }
+        btScanning = true
+        try { ad.cancelDiscovery(); ad.startDiscovery() } catch (_: Exception) { btScanning = false }
+        renderJoin()
     }
 
     private fun stopBtScan() {
+        btScanning = false
         btReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) { } }
         btReceiver = null
         try { btAdapter?.cancelDiscovery() } catch (_: Exception) { }
@@ -566,6 +629,7 @@ class MainActivity : Activity() {
         presence?.stop(); presence = null
         scanner?.stop(); scanner = null
         nearbyBox = null
+        joinList = null; joinStatus = null; joinBtButton = null
         stopBtScan()
     }
 
@@ -735,10 +799,14 @@ class MainActivity : Activity() {
                 setCol.addView(Ui.spacer(this, 6))
                 if (st.optBoolean("bt")) {
                     setCol.addView(Ui.text(this, "🔵 Bluetooth: đang mở", 14f, Color.WHITE, true))
-                    val btName = try { btAdapter?.name } catch (_: Exception) { null }
-                    if (btName != null) setCol.addView(Ui.text(this, "Bạn bè dò tìm và chọn: $btName", 12f, Ui.MUTED))
-                } else {
-                    setCol.addView(Ui.button(this, "🔵 Mở Bluetooth cho bàn", Ui.BLUE, Color.WHITE, 14f) { openBtHosting() })
+                    val btName = st.optString("btName")
+                    if (btName.isNotEmpty()) setCol.addView(Ui.text(this, "Tên máy trên Bluetooth: $btName", 12f, Ui.MUTED))
+                    if (!st.optBoolean("btVisible")) {
+                        setCol.addView(Ui.button(this, "🔵 Cho máy khác dò thấy", Ui.BLUE, Color.WHITE, 13f) { openBtHosting(onlyVisible = true) },
+                            Ui.lp(Ui.WRAP, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 4) })
+                    }
+                } else if (btAdapter != null) {
+                    setCol.addView(Ui.button(this, "🔵 Bật Bluetooth cho bàn", Ui.BLUE, Color.WHITE, 14f) { openBtHosting() })
                 }
             }
             setCol.addView(Ui.spacer(this, 12))
@@ -750,14 +818,19 @@ class MainActivity : Activity() {
         cols.addView(setCol, Ui.lp(0, Ui.WRAP, 1f, Ui.dp(this, 6)))
     }
 
-    private fun openBtHosting() {
+    /** Bật Bluetooth cho bàn: mở cổng nhận khách rồi xin cho máy hiện với máy khác (tối đa 1 giờ). */
+    private fun openBtHosting(onlyVisible: Boolean = false) {
         val h = session as? HostTable ?: return
         withBluetooth { ad ->
-            val i = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+            if (session !== h) return@withBluetooth
+            if (!onlyVisible && !h.startBt(ad)) { toast("Không mở được Bluetooth"); return@withBluetooth }
+            h.btName = try { ad.name } catch (_: Exception) { null }
+            h.broadcast()
+            val i = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 3600)
             startForResult(i) { code ->
-                if (code == RESULT_CANCELED) toast("Cần cho phép hiện máy với thiết bị khác để bạn bè tìm thấy")
-                if (!h.startBt(ad)) toast("Không mở được Bluetooth")
-                else toast("Đã mở Bluetooth. Máy bạn hiện với người khác trong 5 phút")
+                if (code == RESULT_CANCELED) toast("Bạn chưa cho máy hiện với máy khác, khách sẽ khó dò thấy qua Bluetooth")
+                else h.btVisibleUntil = System.currentTimeMillis() + (if (code > 0) code else 3600) * 1000L
+                h.broadcast()
             }
         }
     }
