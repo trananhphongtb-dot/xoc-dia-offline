@@ -31,6 +31,10 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
 import vn.xocdiaoffline.app.net.FoundTable
+import vn.xocdiaoffline.app.net.Invite
+import vn.xocdiaoffline.app.net.NearbyScanner
+import vn.xocdiaoffline.app.net.Peer
+import vn.xocdiaoffline.app.net.Presence
 import vn.xocdiaoffline.app.net.WifiFinder
 import vn.xocdiaoffline.app.net.connectBt
 import vn.xocdiaoffline.app.net.connectWifi
@@ -51,6 +55,13 @@ class MainActivity : Activity() {
     private var wifiFinder: WifiFinder? = null
     private var btReceiver: BroadcastReceiver? = null
     private var progress: AlertDialog? = null
+    private var presence: Presence? = null
+    private var scanner: NearbyScanner? = null
+    private var peers: List<Peer> = emptyList()
+    private var nearbyBox: LinearLayout? = null
+    private val invited = HashMap<String, Long>()
+    private var inviteDialog: AlertDialog? = null
+    private var lastRecorded = ""
 
     private val btAdapter: BluetoothAdapter? by lazy {
         (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -139,6 +150,7 @@ class MainActivity : Activity() {
     private fun showHome() {
         stopFinders()
         screen = "home"
+        startPresence()
         val root = Ui.row(this)
         feltBackground(root)
         val pad = Ui.dp(this, 20)
@@ -176,6 +188,8 @@ class MainActivity : Activity() {
             if (Wallet.claim(this)) { toast("Đã nhận, ví của bạn có ${Wallet.fmt(Wallet.START_XU)} xu"); refreshXu() }
             else toast("Khi còn dưới ${Wallet.fmt(Wallet.CLAIM_BELOW)} xu mới nhận được")
         }, Ui.lp(Ui.MATCH, Ui.WRAP))
+        left.addView(Ui.spacer(this, 8))
+        left.addView(Ui.button(this, "📊 Thành tích của bạn", Color.parseColor("#33FFFFFF"), Color.WHITE, 15f) { showStats() }, Ui.lp(Ui.MATCH, Ui.WRAP))
         left.addView(Ui.spacer(this, 10))
         left.addView(Ui.text(this, "Xu chỉ để chơi cho vui, không có giá trị quy đổi.", 11f, Ui.MUTED).apply { gravity = Gravity.CENTER })
         root.addView(left, Ui.lp(0, Ui.MATCH, 0.9f))
@@ -212,6 +226,82 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun showStats() {
+        val sb = StringBuilder()
+        for (g in listOf("tienlen", "phom", "xocdia", "baucua")) {
+            val r = Stats.get(this, g)
+            sb.append("■ ").append(GameInfo.title(g)).append("\n")
+            if (r.played == 0) { sb.append("   Chưa chơi ván nào\n\n"); continue }
+            val rate = r.wins * 100 / r.played
+            sb.append("   Số ván: ${r.played}   ·   Thắng: ${r.wins} ($rate%)\n")
+            sb.append("   Tổng xu: ${if (r.net > 0) "+" else ""}${Wallet.fmt(r.net)}   ·   Ván ăn đậm nhất: +${Wallet.fmt(r.bestWin)}\n")
+            sb.append("   Chuỗi thắng dài nhất: ${r.bestStreak} ván\n\n")
+        }
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("📊 Thành tích của ${Wallet.name(this)}")
+            .setMessage(sb.toString().trimEnd())
+            .setPositiveButton("Đóng", null).show()
+    }
+
+    // ======================================================= NGƯỜI CHƠI Ở GẦN
+    private fun startPresence() {
+        presence?.stop()
+        presence = Presence(this, Stats.deviceId(this),
+            { JSONObject().put("name", Wallet.name(this)).put("xu", Wallet.xu(this)) }) { inv -> onInvite(inv) }
+            .also { it.start() }
+    }
+
+    private fun onInvite(inv: Invite) {
+        if (screen == "table") return
+        inviteDialog?.dismiss()
+        inviteDialog = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Lời mời chơi")
+            .setMessage("${inv.hostName} mời bạn vào bàn ${GameInfo.title(inv.game)}.")
+            .setPositiveButton("Vào bàn") { _, _ ->
+                showProgress("Đang vào bàn...")
+                connectWifi(inv.ip) { c, err -> hideProgress(); if (c != null) joinWith(c, inv.game) else toast(err ?: "Lỗi") }
+            }
+            .setNegativeButton("Để sau", null).show()
+    }
+
+    private fun startScanner() {
+        scanner?.stop()
+        peers = emptyList()
+        scanner = NearbyScanner(this) { list -> peers = list; renderNearby() }.also { it.start() }
+    }
+
+    private fun renderNearby() {
+        val box = nearbyBox ?: return
+        val h = session as? HostTable ?: return
+        box.removeAllViews()
+        if (peers.isEmpty()) {
+            box.addView(Ui.text(this, "Chưa thấy ai. Người ở gần mở app (cùng Wi‑Fi hoặc bắt điểm phát sóng của bạn) sẽ hiện ở đây.", 12f, Ui.MUTED))
+            return
+        }
+        val now = System.currentTimeMillis()
+        for (p in peers) {
+            val row = Ui.row(this).apply {
+                background = Ui.rounded(Color.parseColor("#22FFFFFF"), Ui.dp(this@MainActivity, 10).toFloat())
+                val pd = Ui.dp(this@MainActivity, 8); setPadding(pd * 2, pd, pd, pd)
+            }
+            val info = Ui.col(this)
+            info.addView(Ui.text(this, "🙂 " + p.name, 15f, Color.WHITE, true))
+            info.addView(Ui.text(this, "${Wallet.fmt(p.xu)} xu", 12f, Ui.GOLD))
+            row.addView(info, Ui.lp(0, Ui.WRAP, 1f))
+            val justInvited = now - (invited[p.id] ?: 0L) < 15_000
+            row.addView(Ui.button(this, if (justInvited) "Đã mời" else "Mời", if (justInvited) Ui.GREY else Ui.GOLD,
+                if (justInvited) Color.WHITE else Color.parseColor("#3A2A00"), 13f) {
+                if (System.currentTimeMillis() - (invited[p.id] ?: 0L) >= 15_000) {
+                    invited[p.id] = System.currentTimeMillis()
+                    scanner?.invite(p, Wallet.name(this), h.gameId)
+                    toast("Đã gửi lời mời tới ${p.name}")
+                    renderNearby()
+                }
+            })
+            box.addView(row, Ui.lp(Ui.MATCH, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 6) })
+        }
+    }
+
     private fun chooseMode(gameId: String) {
         val items = arrayOf("🤖  Chơi với máy", "📶  Tạo bàn (bạn bè vào qua Wi‑Fi / Bluetooth)", "🔍  Vào bàn của bạn")
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
@@ -236,6 +326,7 @@ class MainActivity : Activity() {
     private fun showJoin(gameId: String) {
         stopFinders()
         screen = "join"
+        startPresence()
         val scroll = ScrollView(this)
         feltBackground(scroll)
         val root = Ui.col(this)
@@ -368,6 +459,9 @@ class MainActivity : Activity() {
 
     private fun stopFinders() {
         wifiFinder?.stop(); wifiFinder = null
+        presence?.stop(); presence = null
+        scanner?.stop(); scanner = null
+        nearbyBox = null
         stopBtScan()
     }
 
@@ -413,10 +507,12 @@ class MainActivity : Activity() {
         }
         s.onState = { st -> hideProgress(); renderState(st) }
         s.lastState?.let { renderState(it) }
+        if (s is HostTable && !s.solo) startScanner()
     }
 
     private fun renderState(st: JSONObject) {
         val phase = st.optString("phase")
+        recordStats(st)
         val scroll = lobbyView?.parent as? View
         if (phase == "lobby") {
             scroll?.visibility = View.VISIBLE
@@ -426,6 +522,22 @@ class MainActivity : Activity() {
             scroll?.visibility = View.GONE
             gameView?.visibility = View.VISIBLE
             gameView?.setState(st)
+        }
+    }
+
+    /** Ghi thành tích cá nhân mỗi khi một ván kết thúc. */
+    private fun recordStats(st: JSONObject) {
+        val res = st.optJSONObject("g")?.optJSONObject("result") ?: return
+        val key = st.optString("game") + "#" + st.optInt("gameNo") + "#" + System.identityHashCode(session)
+        if (key == lastRecorded) return
+        lastRecorded = key
+        val me = st.optInt("me")
+        val lines = res.optJSONArray("lines") ?: return
+        for (i in 0 until lines.length()) {
+            val ln = lines.getJSONObject(i)
+            if (ln.optInt("seat") == me) {
+                Stats.record(this, st.optString("game"), res.optInt("winner") == me, ln.optLong("delta"))
+            }
         }
     }
 
@@ -468,7 +580,11 @@ class MainActivity : Activity() {
             }
             val info = Ui.col(this)
             info.addView(Ui.text(this, label, 15f, if (kind == "empty") Ui.MUTED else Color.WHITE, kind != "empty"))
-            if (kind != "empty") info.addView(Ui.text(this, "${Wallet.fmt(sj.optLong("xu"))} xu", 12f, Ui.GOLD))
+            if (kind != "empty") {
+                val played = sj.optInt("played"); val net = sj.optLong("net")
+                val score = if (played > 0) "   ·   Thắng ${sj.optInt("wins")}/$played ván, ${if (net > 0) "+" else ""}${Wallet.fmt(net)}" else ""
+                info.addView(Ui.text(this, "${Wallet.fmt(sj.optLong("xu"))} xu$score", 12f, Ui.GOLD))
+            }
             row.addView(info, Ui.lp(0, Ui.WRAP, 1f))
             if (host && i > 0) {
                 if (kind == "empty") row.addView(Ui.button(this, "+ Thêm máy", Color.parseColor("#33FFFFFF"), Color.WHITE, 13f) { s.act(act("addBot", "seat" to i)) })
@@ -476,6 +592,14 @@ class MainActivity : Activity() {
             }
             seatCol.addView(row, Ui.lp(Ui.MATCH, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 6) })
         }
+        if (host && !st.optBoolean("solo")) {
+            seatCol.addView(Ui.spacer(this, 14))
+            seatCol.addView(Ui.text(this, "👥 Người chơi ở gần", 16f, Color.WHITE, true))
+            val box = Ui.col(this)
+            seatCol.addView(box, Ui.lp(Ui.MATCH, Ui.WRAP))
+            nearbyBox = box
+            renderNearby()
+        } else nearbyBox = null
         cols.addView(seatCol, Ui.lp(0, Ui.WRAP, 1.2f, Ui.dp(this, 6)))
 
         // Cài đặt bàn
@@ -543,6 +667,7 @@ class MainActivity : Activity() {
     }
 
     private fun leaveTable() {
+        scanner?.stop(); scanner = null
         session?.leave()
         session = null
         showHome()

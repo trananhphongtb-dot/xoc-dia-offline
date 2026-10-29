@@ -78,6 +78,7 @@ class Conn(val label: String, private val input: InputStream, output: OutputStre
 object NetConst {
     const val TCP_PORT = 47321
     const val UDP_PORT = 47322
+    const val PEER_PORT = 47323
     const val APP_TAG = "xdo1"
     val BT_UUID: UUID = UUID.fromString("6b8f2a10-3c1e-4c55-9a7e-0d1f2c3b4a59")
 }
@@ -273,4 +274,139 @@ fun connectBt(adapter: BluetoothAdapter, device: BluetoothDevice, cb: (Conn?, St
         }
         mainHandler.post { cb(null, err) }
     }.apply { isDaemon = true }.start()
+}
+
+// ---------------------------------------------------------------------------
+// Tìm người chơi ở gần (qua Wi‑Fi / điểm phát sóng)
+//  - Máy đang rảnh (ở trang chủ / màn vào bàn) phát tín hiệu "có mặt" mỗi 2 giây
+//    và lắng nghe lời mời.
+//  - Chủ bàn lắng nghe các tín hiệu đó để hiện danh sách, bấm "Mời" là gửi lời mời.
+// ---------------------------------------------------------------------------
+private fun multicastLock(ctx: Context): WifiManager.MulticastLock? = try {
+    (ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+        .createMulticastLock("xdo-peer").apply { setReferenceCounted(false) }
+} catch (_: Exception) { null }
+
+private fun openPeerSocket(): DatagramSocket = DatagramSocket(null).apply {
+    reuseAddress = true; broadcast = true; soTimeout = 1000
+    bind(InetSocketAddress(NetConst.PEER_PORT))
+}
+
+class Invite(val ip: String, val hostName: String, val game: String)
+
+/** Chạy trên máy đang rảnh: báo "tôi ở đây" và nhận lời mời. */
+class Presence(ctx: Context, private val myId: String, private val info: () -> JSONObject,
+               private val onInvite: (Invite) -> Unit) {
+    @Volatile private var running = false
+    private var sock: DatagramSocket? = null
+    private val lock = multicastLock(ctx)
+    private var lastInviteKey = ""
+    private var lastInviteAt = 0L
+
+    fun start() {
+        if (running) return
+        running = true
+        try { lock?.acquire() } catch (_: Exception) { }
+        Thread {
+            try {
+                val s = openPeerSocket(); sock = s
+                var lastSent = 0L
+                val buf = ByteArray(2048)
+                while (running) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastSent > 2000) {
+                        lastSent = now
+                        val o = info().put("app", NetConst.APP_TAG).put("t", "here").put("id", myId)
+                        val data = o.toString().toByteArray(Charsets.UTF_8)
+                        for (t in broadcastTargets()) try { s.send(DatagramPacket(data, data.size, t, NetConst.PEER_PORT)) } catch (_: Exception) { }
+                    }
+                    try {
+                        val pk = DatagramPacket(buf, buf.size)
+                        s.receive(pk)
+                        val o = JSONObject(String(pk.data, 0, pk.length, Charsets.UTF_8))
+                        if (o.optString("app") != NetConst.APP_TAG || o.optString("t") != "invite") continue
+                        if (o.optString("to") != myId) continue
+                        val ip = pk.address.hostAddress ?: continue
+                        val inv = Invite(ip, o.optString("name"), o.optString("game"))
+                        mainHandler.post {
+                            // Mỗi lời mời gửi 3 lần cho chắc, chỉ hiện 1 lần
+                            val key = ip + inv.game
+                            val t = System.currentTimeMillis()
+                            if (key != lastInviteKey || t - lastInviteAt > 5000) {
+                                lastInviteKey = key; lastInviteAt = t
+                                if (running) onInvite(inv)
+                            }
+                        }
+                    } catch (_: java.net.SocketTimeoutException) { } catch (_: Exception) { }
+                }
+            } catch (_: Exception) { }
+        }.apply { isDaemon = true }.start()
+    }
+
+    fun stop() {
+        running = false
+        try { sock?.close() } catch (_: Exception) { }
+        try { lock?.release() } catch (_: Exception) { }
+    }
+}
+
+class Peer(val id: String, val ip: String, val name: String, val xu: Long, var seen: Long)
+
+/** Chạy trên máy chủ bàn: liệt kê người đang rảnh ở gần và gửi lời mời. */
+class NearbyScanner(ctx: Context, private val onUpdate: (List<Peer>) -> Unit) {
+    @Volatile private var running = false
+    private var sock: DatagramSocket? = null
+    private val lock = multicastLock(ctx)
+    private val peers = LinkedHashMap<String, Peer>()
+
+    fun start() {
+        if (running) return
+        running = true
+        try { lock?.acquire() } catch (_: Exception) { }
+        Thread {
+            try {
+                val s = openPeerSocket(); sock = s
+                val buf = ByteArray(2048)
+                while (running) {
+                    try {
+                        val pk = DatagramPacket(buf, buf.size)
+                        s.receive(pk)
+                        val o = JSONObject(String(pk.data, 0, pk.length, Charsets.UTF_8))
+                        if (o.optString("app") != NetConst.APP_TAG || o.optString("t") != "here") continue
+                        val ip = pk.address.hostAddress ?: continue
+                        val p = Peer(o.optString("id"), ip, o.optString("name"), o.optLong("xu"), System.currentTimeMillis())
+                        mainHandler.post { peers[p.id] = p; publish() }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        mainHandler.post { publish() }
+                    } catch (_: Exception) { }
+                }
+            } catch (_: Exception) { }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun publish() {
+        val now = System.currentTimeMillis()
+        peers.values.removeAll { now - it.seen > 6000 }
+        if (running) onUpdate(peers.values.toList())
+    }
+
+    fun invite(p: Peer, hostName: String, game: String) {
+        Thread {
+            try {
+                val data = JSONObject().put("app", NetConst.APP_TAG).put("t", "invite").put("to", p.id)
+                    .put("name", hostName).put("game", game).toString().toByteArray(Charsets.UTF_8)
+                val addr = InetAddress.getByName(p.ip)
+                repeat(3) {
+                    try { sock?.send(DatagramPacket(data, data.size, addr, NetConst.PEER_PORT)) } catch (_: Exception) { }
+                    Thread.sleep(250)
+                }
+            } catch (_: Exception) { }
+        }.apply { isDaemon = true }.start()
+    }
+
+    fun stop() {
+        running = false
+        try { sock?.close() } catch (_: Exception) { }
+        try { lock?.release() } catch (_: Exception) { }
+    }
 }

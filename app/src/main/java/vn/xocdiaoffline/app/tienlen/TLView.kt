@@ -31,6 +31,7 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
     private var lastEventId = -1
     private var eventText = ""
     private var eventAt = 0L
+    private var showBoard = false
 
     private class Hit(val rect: RectF, val action: () -> Unit)
     private val hits = mutableListOf<Hit>()
@@ -189,8 +190,56 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
         hits += Hit(leave) { onLeave() }
         txt.textAlign = Paint.Align.RIGHT; txt.textSize = dp(13f); txt.color = Ui.GOLD; txt.typeface = bold
         c.drawText("Cược ${Wallet.fmt(s.optLong("bet"))} xu", w - dp(14f), dp(30f), txt)
+        val boardBtn = RectF(w - dp(126f), dp(40f), w - dp(10f), dp(72f))
+        drawButton(c, boardBtn, "📊 Bảng điểm", Color.parseColor("#66000000"), Color.WHITE, dp(13f))
+        hits += Hit(boardBtn) { showBoard = !showBoard }
 
         if (result != null) drawResult(c, w, h, s, result)
+        if (showBoard) drawBoard(c, w, h, s)
+    }
+
+    /** Bảng điểm cả buổi của mọi người trong bàn. */
+    private fun drawBoard(c: Canvas, w: Float, h: Float, s: JSONObject) {
+        val seats = s.optJSONArray("seats") ?: return
+        val me = s.optInt("me")
+        val rows = (0 until seats.length()).map { it to seats.getJSONObject(it) }
+            .filter { it.second.optString("kind") != "empty" }
+            .sortedByDescending { it.second.optLong("net") }
+        fill.color = Color.parseColor("#99000000")
+        c.drawRect(0f, 0f, w, h, fill)
+        val pw = minOf(w * 0.7f, dp(520f)); val rowH = dp(40f)
+        val ph = dp(96f) + rowH * rows.size
+        val panel = RectF(w / 2 - pw / 2, h / 2 - ph / 2, w / 2 + pw / 2, h / 2 + ph / 2)
+        fill.color = Color.parseColor("#0E3B27")
+        c.drawRoundRect(panel, dp(18f), dp(18f), fill)
+        stroke.color = Ui.GOLD; stroke.strokeWidth = dp(2f)
+        c.drawRoundRect(panel, dp(18f), dp(18f), stroke)
+        label(c, "📊 Bảng điểm cả buổi", w / 2, panel.top + dp(32f), dp(18f), Ui.GOLD, true)
+        val colWin = panel.left + pw * 0.58f
+        val colNet = panel.right - dp(20f)
+        txt.textSize = dp(12f); txt.color = Ui.MUTED; txt.typeface = Typeface.DEFAULT
+        txt.textAlign = Paint.Align.CENTER; c.drawText("Thắng / Ván", colWin, panel.top + dp(56f), txt)
+        txt.textAlign = Paint.Align.RIGHT; c.drawText("Xu thắng thua", colNet, panel.top + dp(56f), txt)
+        for ((k, pair) in rows.withIndex()) {
+            val (i, sj) = pair
+            val y = panel.top + dp(66f) + rowH * k
+            if (i == me) {
+                fill.color = Color.parseColor("#22F2C14E")
+                c.drawRoundRect(RectF(panel.left + dp(10f), y, panel.right - dp(10f), y + rowH - dp(4f)), dp(8f), dp(8f), fill)
+            }
+            val base = y + rowH * 0.62f
+            txt.textAlign = Paint.Align.LEFT; txt.textSize = dp(15f); txt.typeface = bold; txt.color = Color.WHITE
+            c.drawText("${k + 1}. " + (if (i == me) "Bạn" else sj.optString("name")), panel.left + dp(22f), base, txt)
+            txt.textAlign = Paint.Align.CENTER; txt.typeface = Typeface.DEFAULT
+            c.drawText("${sj.optInt("wins")} / ${sj.optInt("played")}", colWin, base, txt)
+            val net = sj.optLong("net")
+            txt.textAlign = Paint.Align.RIGHT; txt.typeface = bold
+            txt.color = when { net > 0 -> Color.parseColor("#69F0AE"); net < 0 -> Color.parseColor("#FF8A80"); else -> Color.WHITE }
+            c.drawText((if (net > 0) "+" else "") + Wallet.fmt(net), colNet, base, txt)
+        }
+        label(c, "Chạm để đóng", w / 2, panel.bottom - dp(12f), dp(11f), Ui.MUTED, false)
+        hits.clear()
+        hits += Hit(RectF(0f, 0f, w, h)) { showBoard = false }
     }
 
     private fun drawTable(c: Canvas, w: Float, h: Float) {
@@ -313,13 +362,18 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
             val delta = ln.optLong("delta")
             txt.textAlign = Paint.Align.RIGHT; txt.typeface = bold; txt.textSize = dp(17f)
             txt.color = when { delta > 0 -> Color.parseColor("#69F0AE"); delta < 0 -> Color.parseColor("#FF8A80"); else -> Color.WHITE }
-            c.drawText((if (delta > 0) "+" else "") + Wallet.fmt(delta) + " xu", panel.right - dp(22f), y + rowH * 0.55f, txt)
+            c.drawText((if (delta > 0) "+" else "") + Wallet.fmt(delta) + " xu", panel.right - dp(22f), y + rowH * 0.45f, txt)
+            val sj = seats.getJSONObject(ln.optInt("seat"))
+            val sessNet = sj.optLong("net")
+            txt.typeface = Typeface.DEFAULT; txt.textSize = dp(11f); txt.color = Ui.MUTED
+            c.drawText("Cả buổi: thắng ${sj.optInt("wins")}/${sj.optInt("played")}, " + (if (sessNet > 0) "+" else "") + Wallet.fmt(sessNet),
+                panel.right - dp(22f), y + rowH * 0.45f + dp(15f), txt)
             // Bài còn lại
             val cards = ln.optJSONArray("cards").toIntList()
             if (cards.isNotEmpty()) {
                 val ch = (rowH - dp(10f)).coerceAtMost(dp(44f)); val cw = ch * 0.7f
-                val gap = minOf(cw * 0.5f, pw * 0.38f / cards.size)
-                var x = panel.left + pw * 0.40f
+                val gap = minOf(cw * 0.5f, pw * 0.26f / cards.size)
+                var x = panel.left + pw * 0.36f
                 for (card in cards) { drawCard(c, x, y + (rowH - ch) / 2, cw, ch, card, false, false); x += gap }
             }
         }

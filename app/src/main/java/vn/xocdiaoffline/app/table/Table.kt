@@ -46,7 +46,12 @@ class Seat(var kind: SeatKind = SeatKind.EMPTY) {
     var name = ""
     var xu = 0L
     var conn: Conn? = null
+    // Bảng điểm cả buổi (tính từ lúc người này ngồi vào ghế)
+    var played = 0
+    var wins = 0
+    var net = 0L
     val occupied get() = kind != SeatKind.EMPTY
+    fun resetScore() { played = 0; wins = 0; net = 0 }
 }
 
 /**
@@ -144,6 +149,7 @@ class HostTable(
                 s.name = o.optString("name").take(15).ifBlank { "Khách" }
                 s.xu = o.optLong("xu").coerceAtLeast(0)
                 s.conn = c
+                s.resetScore()
                 c.send(JSONObject().put("t", "welcome").put("seat", idx))
                 toastAll("${s.name} đã vào bàn")
                 broadcast()
@@ -194,6 +200,7 @@ class HostTable(
     private fun addBot(i: Int) {
         val s = seats[i]
         s.kind = SeatKind.BOT
+        s.resetScore()
         val used = seats.map { it.name }.toSet()
         s.name = botNames.firstOrNull { it !in used } ?: "Máy $i"
         s.xu = 50_000
@@ -323,6 +330,8 @@ class HostTable(
             seats[i].conn?.send(JSONObject().put("t", "wallet").put("delta", delta[i]))
         }
         lastWinnerSeat = players[g.winner]
+        for (s in players) { seats[s].played++; seats[s].net += delta[s] }
+        seats[lastWinnerSeat].wins++
         val lines = JSONArray()
         for (p in players.indices) {
             val s = players[p]
@@ -347,7 +356,10 @@ class HostTable(
         for (s in seats) sa.put(JSONObject()
             .put("kind", s.kind.name.lowercase())
             .put("name", s.name)
-            .put("xu", s.xu))
+            .put("xu", s.xu)
+            .put("played", s.played)
+            .put("wins", s.wins)
+            .put("net", s.net))
         o.put("seats", sa)
         if (v == 0) {
             o.put("wifi", wifi != null).put("bt", bt != null)
