@@ -45,6 +45,8 @@ import vn.xocdiaoffline.app.table.HostTable
 import vn.xocdiaoffline.app.table.TableSession
 import vn.xocdiaoffline.app.table.act
 import vn.xocdiaoffline.app.tienlen.TLView
+import vn.xocdiaoffline.app.cards3.ThreeCardView
+import vn.xocdiaoffline.app.ui.GameView
 import vn.xocdiaoffline.app.ui.Ui
 
 @SuppressLint("MissingPermission")
@@ -203,31 +205,29 @@ class MainActivity : Activity() {
         left.addView(Ui.text(this, "Xu chỉ để chơi cho vui, không có giá trị quy đổi.", 11f, Ui.MUTED).apply { gravity = Gravity.CENTER })
         root.addView(left, Ui.lp(0, Ui.MATCH, 0.9f))
 
-        // Cột phải: 4 game
+        // Cột phải: 6 game
         val grid = Ui.col(this)
-        val games = listOf(
-            listOf("xocdia", "⚪🔴", "Xóc đĩa", "Sắp có"),
-            listOf("baucua", "🦀🐟", "Bầu cua tôm cá", "Sắp có"),
-            listOf("tienlen", "🂡🃁", "Tiến lên miền Nam", "2 – 4 người"),
-            listOf("phom", "🃏", "Phỏm", "Sắp có"),
-        )
+        val icons = mapOf("xocdia" to "⚪🔴", "baucua" to "🦀🐟", "tienlen" to "♠️♥️", "phom" to "🃏", "lieng" to "💰🎴", "bacay" to "3️⃣🃏")
+        val games = GameInfo.ALL.map { id ->
+            listOf(id, icons[id] ?: "", GameInfo.title(id), if (id in GameInfo.READY) GameInfo.players(id) else "Sắp có")
+        }
         for (r in 0 until 2) {
             val row = Ui.row(this)
-            for (k in 0 until 2) {
-                val gm = games[r * 2 + k]
-                val ready = gm[0] == "tienlen"
+            for (k in 0 until 3) {
+                val gm = games[r * 3 + k]
+                val ready = gm[0] in GameInfo.READY
                 val tile = Ui.col(this).apply {
                     gravity = Gravity.CENTER
                     background = Ui.rounded(if (ready) Color.parseColor("#E60A3D27") else Color.parseColor("#80092A1B"),
                         Ui.dp(this@MainActivity, 18).toFloat(), Ui.dp(this@MainActivity, 2), if (ready) Ui.GOLD else Color.parseColor("#447FA08E"))
-                    addView(Ui.text(this@MainActivity, gm[1], 30f).apply { gravity = Gravity.CENTER })
-                    addView(Ui.text(this@MainActivity, gm[2], 18f, if (ready) Color.WHITE else Ui.MUTED, true).apply { gravity = Gravity.CENTER })
+                    addView(Ui.text(this@MainActivity, gm[1], 26f).apply { gravity = Gravity.CENTER })
+                    addView(Ui.text(this@MainActivity, gm[2], 16f, if (ready) Color.WHITE else Ui.MUTED, true).apply { gravity = Gravity.CENTER })
                     addView(Ui.text(this@MainActivity, gm[3], 12f, if (ready) Ui.GOLD else Ui.MUTED).apply { gravity = Gravity.CENTER })
                     setOnClickListener {
                         if (ready) chooseMode(gm[0]) else toast("${gm[2]} đang được làm, sẽ có trong bản sau")
                     }
                 }
-                row.addView(tile, Ui.lp(0, Ui.MATCH, 1f, Ui.dp(this, 7)))
+                row.addView(tile, Ui.lp(0, Ui.MATCH, 1f, Ui.dp(this, 5)))
             }
             grid.addView(row, Ui.lp(Ui.MATCH, 0, 1f))
         }
@@ -252,7 +252,7 @@ class MainActivity : Activity() {
             }
             val sb = StringBuilder()
             var any = false
-            for (g in listOf("tienlen", "phom", "xocdia", "baucua")) {
+            for (g in GameInfo.ALL) {
                 if (tab < 2) {
                     val r = Stats.recent(this, g, if (tab == 0) 1 else 7)
                     if (r.played == 0) continue
@@ -576,8 +576,11 @@ class MainActivity : Activity() {
 
     private fun hideProgress() { progress?.dismiss(); progress = null }
 
+    private var joinGame = "tienlen"
+
     private fun joinWith(c: vn.xocdiaoffline.app.net.Conn, gameId: String) {
         stopFinders()
+        joinGame = gameId
         val s = ClientTable(this, c, gameId)
         enterTable(s)
         showProgress("Đang chờ chủ bàn nhận...")
@@ -586,7 +589,7 @@ class MainActivity : Activity() {
     // ============================================================== BÀN CHƠI
     private var tableRoot: FrameLayout? = null
     private var lobbyView: LinearLayout? = null
-    private var gameView: TLView? = null
+    private var gameView: View? = null
 
     private fun enterTable(s: TableSession) {
         stopFinders()
@@ -596,7 +599,9 @@ class MainActivity : Activity() {
         val root = FrameLayout(this)
         feltBackground(root)
         val lobby = Ui.col(this)
-        val gv = TLView(this, { a -> s.act(a) }, { confirmLeave() })
+        val gid = (s as? HostTable)?.gameId ?: joinGame
+        val gv: View = if (gid == "tienlen") TLView(this, { a -> s.act(a) }, { confirmLeave() })
+                       else ThreeCardView(this, { a -> s.act(a) }, { confirmLeave() })
         root.addView(gv, FrameLayout.LayoutParams(-1, -1))
         root.addView(ScrollView(this).apply { addView(lobby) }, FrameLayout.LayoutParams(-1, -1))
         tableRoot = root; lobbyView = lobby; gameView = gv
@@ -627,7 +632,7 @@ class MainActivity : Activity() {
         } else {
             scroll?.visibility = View.GONE
             gameView?.visibility = View.VISIBLE
-            gameView?.setState(st)
+            (gameView as? GameView)?.setState(st)
         }
     }
 
@@ -642,7 +647,7 @@ class MainActivity : Activity() {
         for (i in 0 until lines.length()) {
             val ln = lines.getJSONObject(i)
             if (ln.optInt("seat") == me) {
-                Stats.record(this, st.optString("game"), res.optInt("winner") == me, ln.optLong("delta"))
+                Stats.record(this, st.optString("game"), ln.optLong("delta") > 0, ln.optLong("delta"))
             }
         }
     }

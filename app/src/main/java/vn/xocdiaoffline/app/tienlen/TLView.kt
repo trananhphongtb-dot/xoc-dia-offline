@@ -20,7 +20,7 @@ import vn.xocdiaoffline.app.ui.Ui
 
 /** Màn hình bàn Tiến lên, vẽ hoàn toàn bằng Canvas. */
 @SuppressLint("ViewConstructor")
-class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private val onLeave: () -> Unit) : View(ctx) {
+class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private val onLeave: () -> Unit) : View(ctx), vn.xocdiaoffline.app.ui.GameView {
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -42,7 +42,7 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
     private val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val bold = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
 
-    fun setState(s: JSONObject) {
+    override fun setState(s: JSONObject) {
         state = s
         stateAt = System.currentTimeMillis()
         val g = s.optJSONObject("g")

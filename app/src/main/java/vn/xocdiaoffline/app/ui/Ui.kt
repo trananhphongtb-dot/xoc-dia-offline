@@ -60,3 +60,8 @@ object Ui {
 
     fun spacer(ctx: Context, h: Int): View = View(ctx).apply { layoutParams = LinearLayout.LayoutParams(1, dp(ctx, h)) }
 }
+
+/** Màn bàn chơi của một game: nhận trạng thái và tự vẽ. */
+interface GameView {
+    fun setState(s: org.json.JSONObject)
+}
