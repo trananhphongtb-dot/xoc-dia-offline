@@ -62,6 +62,13 @@ class MainActivity : Activity() {
     private val invited = HashMap<String, Long>()
     private var inviteDialog: AlertDialog? = null
     private var lastRecorded = ""
+    private var tableStartedAt = 0L
+
+    /** Lưu bàn hiện tại vào lịch sử (gọi khi rời bàn / bàn đóng). */
+    private fun saveHistory() {
+        val s = session ?: return
+        History.saveTable(this, s.lastState, tableStartedAt)
+    }
 
     private val btAdapter: BluetoothAdapter? by lazy {
         (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -190,6 +197,8 @@ class MainActivity : Activity() {
         }, Ui.lp(Ui.MATCH, Ui.WRAP))
         left.addView(Ui.spacer(this, 8))
         left.addView(Ui.button(this, "📊 Thành tích của bạn", Color.parseColor("#33FFFFFF"), Color.WHITE, 15f) { showStats() }, Ui.lp(Ui.MATCH, Ui.WRAP))
+        left.addView(Ui.spacer(this, 6))
+        left.addView(Ui.button(this, "🗂 Lịch sử bàn", Color.parseColor("#33FFFFFF"), Color.WHITE, 15f) { showHistory() }, Ui.lp(Ui.MATCH, Ui.WRAP))
         left.addView(Ui.spacer(this, 10))
         left.addView(Ui.text(this, "Xu chỉ để chơi cho vui, không có giá trị quy đổi.", 11f, Ui.MUTED).apply { gravity = Gravity.CENTER })
         root.addView(left, Ui.lp(0, Ui.MATCH, 0.9f))
@@ -227,18 +236,113 @@ class MainActivity : Activity() {
     }
 
     private fun showStats() {
-        val sb = StringBuilder()
-        for (g in listOf("tienlen", "phom", "xocdia", "baucua")) {
-            val r = Stats.get(this, g)
-            sb.append("■ ").append(GameInfo.title(g)).append("\n")
-            if (r.played == 0) { sb.append("   Chưa chơi ván nào\n\n"); continue }
-            val rate = r.wins * 100 / r.played
-            sb.append("   Số ván: ${r.played}   ·   Thắng: ${r.wins} ($rate%)\n")
-            sb.append("   Tổng xu: ${if (r.net > 0) "+" else ""}${Wallet.fmt(r.net)}   ·   Ván ăn đậm nhất: +${Wallet.fmt(r.bestWin)}\n")
-            sb.append("   Chuỗi thắng dài nhất: ${r.bestStreak} ván\n\n")
+        val pad = Ui.dp(this, 18)
+        val root = Ui.col(this).apply { setPadding(pad, pad / 2, pad, pad / 2) }
+        val tabs = Ui.row(this)
+        val body = Ui.text(this, "", 15f, Color.WHITE)
+        val scroll = ScrollView(this).apply { addView(body) }
+        root.addView(tabs, Ui.lp(Ui.MATCH, Ui.WRAP))
+        root.addView(scroll, Ui.lp(Ui.MATCH, Ui.dp(this, 230)))
+        val names = listOf("Hôm nay", "7 ngày", "Tất cả")
+        val btns = mutableListOf<TextView>()
+        fun show(tab: Int) {
+            for ((i, b) in btns.withIndex()) {
+                b.background = Ui.rounded(if (i == tab) Ui.GOLD else Color.parseColor("#33FFFFFF"), Ui.dp(this, 10).toFloat())
+                b.setTextColor(if (i == tab) Color.parseColor("#3A2A00") else Color.WHITE)
+            }
+            val sb = StringBuilder()
+            var any = false
+            for (g in listOf("tienlen", "phom", "xocdia", "baucua")) {
+                if (tab < 2) {
+                    val r = Stats.recent(this, g, if (tab == 0) 1 else 7)
+                    if (r.played == 0) continue
+                    any = true
+                    sb.append("■ ").append(GameInfo.title(g)).append("\n")
+                    sb.append("   Số ván: ${r.played}   ·   Thắng: ${r.wins} (${r.wins * 100 / r.played}%)\n")
+                    sb.append("   Xu thắng thua: ${if (r.net > 0) "+" else ""}${Wallet.fmt(r.net)}\n\n")
+                } else {
+                    val r = Stats.get(this, g)
+                    if (r.played == 0) continue
+                    any = true
+                    sb.append("■ ").append(GameInfo.title(g)).append("\n")
+                    sb.append("   Số ván: ${r.played}   ·   Thắng: ${r.wins} (${r.wins * 100 / r.played}%)\n")
+                    sb.append("   Xu thắng thua: ${if (r.net > 0) "+" else ""}${Wallet.fmt(r.net)}   ·   Ván ăn đậm nhất: +${Wallet.fmt(r.bestWin)}\n")
+                    sb.append("   Chuỗi thắng dài nhất: ${r.bestStreak} ván\n\n")
+                }
+            }
+            body.text = if (any) sb.toString().trimEnd() else "Chưa chơi ván nào trong thời gian này."
         }
+        for ((i, n) in names.withIndex()) {
+            val b = Ui.button(this, n, Color.parseColor("#33FFFFFF"), Color.WHITE, 14f) { show(i) }
+            btns += b
+            tabs.addView(b, Ui.lp(0, Ui.WRAP, 1f, Ui.dp(this, 4)))
+        }
+        show(0)
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle("📊 Thành tích của ${Wallet.name(this)}")
+            .setView(root)
+            .setNeutralButton("🗂 Lịch sử bàn") { _, _ -> showHistory() }
+            .setPositiveButton("Đóng", null).show()
+    }
+
+    private fun showHistory() {
+        stopFinders()
+        screen = "history"
+        val scroll = ScrollView(this)
+        feltBackground(scroll)
+        val root = Ui.col(this)
+        val pad = Ui.dp(this, 18)
+        root.setPadding(pad, pad, pad, pad)
+        scroll.addView(root)
+        val header = Ui.row(this)
+        header.addView(Ui.button(this, "← Quay lại", Color.parseColor("#55000000"), Color.WHITE, 14f) { showHome() })
+        header.addView(Ui.text(this, "  🗂 Lịch sử bàn đã chơi", 20f, Ui.GOLD, true), Ui.lp(0, Ui.WRAP, 1f))
+        val list = History.all(this)
+        if (list.isNotEmpty()) header.addView(Ui.button(this, "Xóa lịch sử", Color.parseColor("#55C62828"), Color.WHITE, 13f) {
+            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setMessage("Xóa toàn bộ lịch sử bàn?")
+                .setPositiveButton("Xóa") { _, _ -> History.clear(this); showHistory() }
+                .setNegativeButton("Hủy", null).show()
+        })
+        root.addView(header)
+        root.addView(Ui.spacer(this, 10))
+        if (list.isEmpty()) root.addView(Ui.text(this, "Chưa có bàn nào. Chơi xong và rời bàn thì bàn sẽ được lưu ở đây.", 15f, Ui.MUTED))
+        for (rec in list) {
+            val players = rec.optJSONArray("players") ?: continue
+            var myNet = 0L
+            for (i in 0 until players.length()) if (players.getJSONObject(i).optBoolean("me")) myNet = players.getJSONObject(i).optLong("net")
+            val where = if (rec.optBoolean("solo")) "Chơi với máy" else "Bàn của ${rec.optString("host")}"
+            val row = Ui.row(this).apply {
+                background = Ui.rounded(Ui.PANEL, Ui.dp(this@MainActivity, 12).toFloat())
+                val p = Ui.dp(this@MainActivity, 12); setPadding(p, p, p, p)
+            }
+            val info = Ui.col(this)
+            info.addView(Ui.text(this, "${GameInfo.title(rec.optString("game"))} · $where", 16f, Color.WHITE, true))
+            info.addView(Ui.text(this, "${History.timeText(rec.optLong("start"))}  ·  ${rec.optInt("games")} ván  ·  ${players.length()} người  ·  cược ${Wallet.fmt(rec.optLong("bet"))}", 12f, Ui.MUTED))
+            row.addView(info, Ui.lp(0, Ui.WRAP, 1f))
+            row.addView(Ui.text(this, (if (myNet > 0) "+" else "") + Wallet.fmt(myNet) + " xu", 17f,
+                if (myNet > 0) Color.parseColor("#69F0AE") else if (myNet < 0) Color.parseColor("#FF8A80") else Color.WHITE, true))
+            row.setOnClickListener { showTableRecord(rec) }
+            root.addView(row, Ui.lp(Ui.MATCH, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 8) })
+        }
+        setContentView(scroll)
+    }
+
+    private fun showTableRecord(rec: JSONObject) {
+        val players = rec.optJSONArray("players") ?: return
+        val rows = (0 until players.length()).map { players.getJSONObject(it) }.sortedByDescending { it.optLong("net") }
+        val sb = StringBuilder()
+        sb.append("Từ ${History.timeText(rec.optLong("start"))}\nĐến ${History.timeText(rec.optLong("end"))}\n")
+        sb.append("Mức cược: ${Wallet.fmt(rec.optLong("bet"))} xu  ·  ${rec.optInt("games")} ván\n\n")
+        for ((k, pj) in rows.withIndex()) {
+            val net = pj.optLong("net")
+            val name = pj.optString("name") + if (pj.optBoolean("me")) " (bạn)" else ""
+            sb.append("${k + 1}. $name\n")
+            sb.append("     Thắng ${pj.optInt("wins")}/${pj.optInt("played")} ván   ·   ${if (net > 0) "+" else ""}${Wallet.fmt(net)} xu\n")
+        }
+        val where = if (rec.optBoolean("solo")) "Chơi với máy" else "Bàn của ${rec.optString("host")}"
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("${GameInfo.title(rec.optString("game"))} · $where")
             .setMessage(sb.toString().trimEnd())
             .setPositiveButton("Đóng", null).show()
     }
@@ -488,6 +592,7 @@ class MainActivity : Activity() {
         stopFinders()
         session = s
         screen = "table"
+        tableStartedAt = System.currentTimeMillis()
         val root = FrameLayout(this)
         feltBackground(root)
         val lobby = Ui.col(this)
@@ -500,6 +605,7 @@ class MainActivity : Activity() {
         s.onToast = { toast(it) }
         s.onClosed = { msg ->
             hideProgress()
+            saveHistory()
             session = null
             AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
                 .setMessage(msg).setCancelable(false)
@@ -668,6 +774,7 @@ class MainActivity : Activity() {
 
     private fun leaveTable() {
         scanner?.stop(); scanner = null
+        saveHistory()
         session?.leave()
         session = null
         showHome()
@@ -677,13 +784,14 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when (screen) {
             "table" -> confirmLeave()
-            "join" -> showHome()
+            "join", "history" -> showHome()
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
     }
 
     override fun onDestroy() {
         stopFinders()
+        saveHistory()
         session?.leave()
         session = null
         super.onDestroy()
