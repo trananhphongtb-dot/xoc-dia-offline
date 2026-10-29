@@ -100,14 +100,14 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
             val gap = minOf(cw * 0.55f, w * 0.5f / cards.size)
             val total = cw + gap * (cards.size - 1)
             var x = w / 2f - total / 2f
-            val y = h * 0.42f - ch / 2f
+            val y = h * 0.47f - ch / 2f
             for (card in cards) { drawCard(c, x, y, cw, ch, card, false, false); x += gap }
             val by = seats.getJSONObject(last.optInt("by")).optString("name")
             label(c, "$by · ${last.optString("desc")}", w / 2f, y - dp(8f), dp(13f), Ui.MUTED, true)
         } ?: run {
             if (result == null && turn >= 0) {
                 val who = if (turn == me) "Bạn" else seats.getJSONObject(turn).optString("name")
-                label(c, "$who đi đầu vòng", w / 2f, h * 0.43f, dp(15f), Ui.MUTED, true)
+                label(c, "$who đi đầu vòng", w / 2f, h * 0.47f, dp(15f), Ui.MUTED, true)
             }
         }
 
