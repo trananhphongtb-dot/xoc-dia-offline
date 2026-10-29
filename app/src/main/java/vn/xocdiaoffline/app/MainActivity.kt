@@ -32,6 +32,11 @@ import android.widget.Toast
 import org.json.JSONObject
 import vn.xocdiaoffline.app.net.FoundTable
 import vn.xocdiaoffline.app.net.Invite
+import vn.xocdiaoffline.app.net.BleConst
+import vn.xocdiaoffline.app.net.BleInvite
+import vn.xocdiaoffline.app.net.BleInviter
+import vn.xocdiaoffline.app.net.BlePeer
+import vn.xocdiaoffline.app.net.BlePresence
 import vn.xocdiaoffline.app.net.NearbyScanner
 import vn.xocdiaoffline.app.net.Peer
 import vn.xocdiaoffline.app.net.Presence
@@ -65,6 +70,9 @@ class MainActivity : Activity() {
     private val invited = HashMap<String, Long>()
     private var inviteDialog: AlertDialog? = null
     private var lastRecorded = ""
+    private var blePresence: BlePresence? = null
+    private var bleInviter: BleInviter? = null
+    private var blePeers: List<BlePeer> = emptyList()
     private var tableStartedAt = 0L
 
     /** Lưu bàn hiện tại vào lịch sử (gọi khi rời bàn / bàn đóng). */
@@ -82,6 +90,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideBars()
         showHome()
+        askBtOnce()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -349,23 +358,56 @@ class MainActivity : Activity() {
     }
 
     // ======================================================= NGƯỜI CHƠI Ở GẦN
+    private fun hasBtPerms() = btPerms().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
     private fun startPresence() {
         presence?.stop()
         presence = Presence(this, Stats.deviceId(this),
             { JSONObject().put("name", Wallet.name(this)).put("xu", Wallet.xu(this)) }) { inv -> onInvite(inv) }
             .also { it.start() }
+        // Bluetooth: chỉ chạy khi đã có quyền và Bluetooth đang bật (không hỏi gì thêm)
+        blePresence?.stop(); blePresence = null
+        val ad = btAdapter
+        if (ad != null && hasBtPerms() && ad.isEnabled) {
+            blePresence = BlePresence(ad, Stats.deviceId(this), Wallet.name(this)) { inv -> onBleInvite(inv) }
+                .also { if (!it.start()) blePresence = null }
+        }
+    }
+
+    /** Lần đầu mở app: xin quyền Bluetooth một lần để nhận được lời mời qua Bluetooth. */
+    private fun askBtOnce() {
+        val pref = getSharedPreferences("app", MODE_PRIVATE)
+        if (btAdapter == null || pref.getBoolean("askedBt", false) || hasBtPerms()) return
+        pref.edit().putBoolean("askedBt", true).apply()
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Chơi qua Bluetooth")
+            .setMessage("Cho phép Bluetooth để tìm bàn ở gần và nhận lời mời chơi từ bạn bè (không cần mạng).")
+            .setPositiveButton("Cho phép") { _, _ -> withPerms(btPerms()) { if (screen == "home" || screen == "join") startPresence() } }
+            .setNegativeButton("Để sau", null).show()
     }
 
     private fun onInvite(inv: Invite) {
         if (screen == "table") return
         inviteDialog?.dismiss()
         inviteDialog = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Lời mời chơi")
+            .setTitle("Lời mời chơi 📶")
             .setMessage("${inv.hostName} mời bạn vào bàn ${GameInfo.title(inv.game)}.")
             .setPositiveButton("Vào bàn") { _, _ ->
-                showProgress("Đang vào bàn...")
+                showProgress("Đang vào bàn qua Wi‑Fi...")
                 connectWifi(inv.ip) { c, err -> hideProgress(); if (c != null) joinWith(c, inv.game) else toast(err ?: "Lỗi") }
             }
+            .setNegativeButton("Để sau", null).show()
+    }
+
+    /** Lời mời qua Bluetooth: mở màn Vào bàn và tự tìm đúng bàn đang mời (ưu tiên Wi‑Fi). */
+    private fun onBleInvite(inv: BleInvite) {
+        if (screen == "table") return
+        val game = GameInfo.ALL.getOrNull(inv.game) ?: return
+        inviteDialog?.dismiss()
+        inviteDialog = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Lời mời chơi 🔵")
+            .setMessage("${inv.hostName} mời bạn vào bàn ${GameInfo.title(game)}.")
+            .setPositiveButton("Vào bàn") { _, _ -> showJoin(game, inv.hostId) }
             .setNegativeButton("Để sau", null).show()
     }
 
@@ -373,32 +415,57 @@ class MainActivity : Activity() {
         scanner?.stop()
         peers = emptyList()
         scanner = NearbyScanner(this) { list -> peers = list; renderNearby() }.also { it.start() }
+        startBleInviter()
     }
+
+    private fun startBleInviter() {
+        val h = session as? HostTable ?: return
+        val ad = btAdapter ?: return
+        if (bleInviter != null || !hasBtPerms() || !ad.isEnabled) return
+        bleInviter = BleInviter(ad, Stats.deviceId(this), Wallet.name(this), GameInfo.ALL.indexOf(h.gameId)) { l ->
+            blePeers = l; renderNearby()
+        }.also { if (!it.start()) bleInviter = null }
+    }
+
+    private class NearPeer(val id: String, val name: String, val xu: Long?, val wifi: Peer?, val ble: Boolean)
 
     private fun renderNearby() {
         val box = nearbyBox ?: return
         val h = session as? HostTable ?: return
         box.removeAllViews()
-        if (peers.isEmpty()) {
-            box.addView(Ui.text(this, "Chưa thấy ai. Người ở gần mở app (cùng Wi‑Fi hoặc bắt điểm phát sóng của bạn) sẽ hiện ở đây.", 12f, Ui.MUTED))
+        // Gộp người thấy qua Wi‑Fi và qua Bluetooth (cùng mã máy)
+        val map = LinkedHashMap<String, NearPeer>()
+        for (p in peers) {
+            val id = BleConst.hex(BleConst.shortId(p.id), 0)
+            map[id] = NearPeer(id, p.name, p.xu, p, false)
+        }
+        for (b in blePeers) {
+            val old = map[b.id]
+            map[b.id] = if (old != null) NearPeer(b.id, old.name, old.xu, old.wifi, true) else NearPeer(b.id, b.name, null, null, true)
+        }
+        if (map.isEmpty()) {
+            box.addView(Ui.text(this, "Chưa thấy ai. Người ở gần đang mở app (cùng Wi‑Fi, bắt điểm phát sóng của bạn, hoặc bật Bluetooth) sẽ hiện ở đây.", 12f, Ui.MUTED))
             return
         }
         val now = System.currentTimeMillis()
-        for (p in peers) {
+        for (p in map.values) {
             val row = Ui.row(this).apply {
                 background = Ui.rounded(Color.parseColor("#22FFFFFF"), Ui.dp(this@MainActivity, 10).toFloat())
                 val pd = Ui.dp(this@MainActivity, 8); setPadding(pd * 2, pd, pd, pd)
             }
+            val icons = (if (p.wifi != null) "📶" else "") + (if (p.ble) "🔵" else "")
             val info = Ui.col(this)
-            info.addView(Ui.text(this, "🙂 " + p.name, 15f, Color.WHITE, true))
-            info.addView(Ui.text(this, "${Wallet.fmt(p.xu)} xu", 12f, Ui.GOLD))
+            info.addView(Ui.text(this, "$icons " + p.name, 15f, Color.WHITE, true))
+            info.addView(Ui.text(this, (p.xu?.let { "${Wallet.fmt(it)} xu · " } ?: "") +
+                when { p.wifi != null && p.ble -> "Wi‑Fi + Bluetooth"; p.wifi != null -> "Wi‑Fi"; else -> "Bluetooth" }, 12f, Ui.GOLD))
             row.addView(info, Ui.lp(0, Ui.WRAP, 1f))
             val justInvited = now - (invited[p.id] ?: 0L) < 15_000
             row.addView(Ui.button(this, if (justInvited) "Đã mời" else "Mời", if (justInvited) Ui.GREY else Ui.GOLD,
                 if (justInvited) Color.WHITE else Color.parseColor("#3A2A00"), 13f) {
                 if (System.currentTimeMillis() - (invited[p.id] ?: 0L) >= 15_000) {
                     invited[p.id] = System.currentTimeMillis()
-                    scanner?.invite(p, Wallet.name(this), h.gameId)
+                    p.wifi?.let { scanner?.invite(it, Wallet.name(this), h.gameId) }
+                    if (p.ble) bleInviter?.invite(p.id)
                     toast("Đã gửi lời mời tới ${p.name}")
                     renderNearby()
                 }
@@ -435,11 +502,18 @@ class MainActivity : Activity() {
     private var joinBtButton: View? = null
     private var joinGameId = ""
     private var btScanning = false
+    /** Khi vào từ lời mời Bluetooth: mã bàn đang mời, app tự tìm và vào đúng bàn đó. */
+    private var joinTarget: String? = null
+    private var autoJoining = false
+    private var probing = false
+    private val probed = HashSet<String>()
 
-    private fun showJoin(gameId: String) {
+    private fun showJoin(gameId: String, target: String? = null) {
         stopFinders()
         screen = "join"
         joinGameId = gameId
+        joinTarget = target
+        autoJoining = false; probing = false; probed.clear()
         startPresence()
         joinWifi = emptyList(); joinBt.clear()
         val scroll = ScrollView(this)
@@ -478,6 +552,42 @@ class MainActivity : Activity() {
         wifiFinder = WifiFinder(this) { l -> joinWifi = l; renderJoin() }.also { it.start() }
         startJoinBt()
         renderJoin()
+        if (target != null) {
+            status.text = "Đang tìm bàn đang mời bạn..."
+            // Cho Wi‑Fi 3 giây trước, chưa thấy thì dò qua Bluetooth
+            mainHandler.postDelayed({ probeNext() }, 3000)
+        }
+    }
+
+    /** Hỏi lần lượt từng máy Bluetooth ở gần xem có phải bàn đang mời mình không. */
+    private fun probeNext() {
+        val target = joinTarget ?: return
+        val ad = btAdapter ?: return
+        if (probing || autoJoining || screen != "join") return
+        val next = joinBt.values.firstOrNull { it.first.address !in probed } ?: return
+        val (dev, name) = next
+        probed += dev.address
+        probing = true
+        joinStatus?.text = "Đang hỏi $name qua Bluetooth..."
+        connectBt(ad, dev) { c, _ ->
+            if (c == null) { probing = false; probeNext(); return@connectBt }
+            var done = false
+            c.onMessage = { o ->
+                if (o.optString("t") == "iam" && !done) {
+                    done = true
+                    c.onClose = null; c.close()
+                    probing = false
+                    if (o.optString("hostId") == target && o.optString("game") == joinGameId) {
+                        autoJoining = true
+                        tryJoin(null, dev, name)
+                    } else probeNext()
+                }
+            }
+            c.onClose = { if (!done) { done = true; probing = false; probeNext() } }
+            c.start()
+            c.send(JSONObject().put("t", "whois"))
+            mainHandler.postDelayed({ if (!done) c.close() }, 4000)
+        }
     }
 
     private fun startJoinBt() {
@@ -513,7 +623,12 @@ class MainActivity : Activity() {
             if (t.btName.isNotEmpty()) usedBtNames += t.btName
             if (t.game != gameId) continue
             val dev = if (t.btName.isNotEmpty()) btByName[t.btName] else null
-            val icons = if (t.btName.isNotEmpty()) "📶🔵" else "📶"
+            val isTarget = joinTarget != null && t.hostId == joinTarget
+            if (isTarget && !autoJoining) {
+                autoJoining = true
+                mainHandler.post { tryJoin(t.ip, dev, t.name) }
+            }
+            val icons = (if (isTarget) "⭐ " else "") + if (t.btName.isNotEmpty()) "📶🔵" else "📶"
             val sub = "${t.players}/${t.max} người · " + if (t.btName.isNotEmpty()) "Wi‑Fi (ưu tiên) + Bluetooth" else "Wi‑Fi"
             list.addView(listRow("$icons  ${t.name}", sub) { tryJoin(t.ip, dev, t.name) })
             count++
@@ -542,7 +657,7 @@ class MainActivity : Activity() {
             connectBt(ad, dev) { c, err ->
                 hideProgress()
                 if (c != null) joinWith(c, gameId)
-                else { toast(err ?: "Lỗi"); if (screen == "join") startJoinBt() }
+                else { toast(err ?: "Lỗi"); autoJoining = false; if (screen == "join") startJoinBt() }
             }
         }
         if (ip != null) {
@@ -552,7 +667,7 @@ class MainActivity : Activity() {
                 when {
                     c != null -> joinWith(c, gameId)
                     dev != null -> { toast("Wi‑Fi không kết nối được, chuyển sang Bluetooth"); viaBt() }
-                    else -> toast(err ?: "Lỗi")
+                    else -> { toast(err ?: "Lỗi"); autoJoining = false }
                 }
             }
         } else viaBt()
@@ -594,6 +709,7 @@ class MainActivity : Activity() {
             if (joinBt.containsKey(d.address)) return
             joinBt[d.address] = d to name
             renderJoin()
+            if (joinTarget != null) probeNext()
         }
         val r = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, i: Intent) {
@@ -604,7 +720,7 @@ class MainActivity : Activity() {
                         if (d != null) addDevice(d)
                     }
                     BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> if (screen == "join" && btScanning) {
-                        mainHandler.postDelayed({ try { if (btScanning) ad.startDiscovery() } catch (_: Exception) { } }, 2000)
+                        mainHandler.postDelayed({ try { if (btScanning && !probing) ad.startDiscovery() } catch (_: Exception) { } }, 2000)
                     }
                 }
             }
@@ -627,7 +743,9 @@ class MainActivity : Activity() {
     private fun stopFinders() {
         wifiFinder?.stop(); wifiFinder = null
         presence?.stop(); presence = null
+        blePresence?.stop(); blePresence = null
         scanner?.stop(); scanner = null
+        bleInviter?.stop(); bleInviter = null; blePeers = emptyList()
         nearbyBox = null
         joinList = null; joinStatus = null; joinBtButton = null
         stopBtScan()
@@ -826,6 +944,7 @@ class MainActivity : Activity() {
             if (!onlyVisible && !h.startBt(ad)) { toast("Không mở được Bluetooth"); return@withBluetooth }
             h.btName = try { ad.name } catch (_: Exception) { null }
             h.broadcast()
+            startBleInviter()
             val i = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 3600)
             startForResult(i) { code ->
                 if (code == RESULT_CANCELED) toast("Bạn chưa cho máy hiện với máy khác, khách sẽ khó dò thấy qua Bluetooth")
@@ -852,6 +971,7 @@ class MainActivity : Activity() {
 
     private fun leaveTable() {
         scanner?.stop(); scanner = null
+        bleInviter?.stop(); bleInviter = null
         saveHistory()
         session?.leave()
         session = null

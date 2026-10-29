@@ -59,6 +59,9 @@ object Stats {
         e.apply()
     }
 
+    /** Mã ngắn 8 ký tự hex (dùng chung cho Wi‑Fi và Bluetooth). */
+    fun shortId(ctx: Context): String = vn.xocdiaoffline.app.net.BleConst.hex(vn.xocdiaoffline.app.net.BleConst.shortId(deviceId(ctx)), 0)
+
     /** Mã riêng của máy để nhận lời mời đúng người. */
     fun deviceId(ctx: Context): String {
         val s = p(ctx)

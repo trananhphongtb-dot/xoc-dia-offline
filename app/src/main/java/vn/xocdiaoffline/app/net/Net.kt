@@ -153,7 +153,7 @@ class WifiServer(private val onConn: (Conn) -> Unit) {
     }
 }
 
-class FoundTable(val ip: String, val name: String, val game: String, val players: Int, val max: Int, var seen: Long, val btName: String = "")
+class FoundTable(val ip: String, val name: String, val game: String, val players: Int, val max: Int, var seen: Long, val btName: String = "", val hostId: String = "")
 
 /** Nghe đèn hiệu UDP để liệt kê các bàn trong cùng mạng Wi‑Fi / điểm phát sóng. */
 class WifiFinder(ctx: Context, private val onUpdate: (List<FoundTable>) -> Unit) {
@@ -185,7 +185,7 @@ class WifiFinder(ctx: Context, private val onUpdate: (List<FoundTable>) -> Unit)
                         if (o.optString("app") != NetConst.APP_TAG) continue
                         val ip = pk.address.hostAddress ?: continue
                         val t = FoundTable(ip, o.optString("name"), o.optString("game"),
-                            o.optInt("players"), o.optInt("max"), System.currentTimeMillis(), o.optString("bt"))
+                            o.optInt("players"), o.optInt("max"), System.currentTimeMillis(), o.optString("bt"), o.optString("hostId"))
                         mainHandler.post { found[ip] = t; publish() }
                     } catch (_: java.net.SocketTimeoutException) {
                         mainHandler.post { publish() }

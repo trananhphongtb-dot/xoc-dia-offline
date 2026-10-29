@@ -98,6 +98,8 @@ class HostTable(
     private var gameNo = 0
     private var timerTask: Runnable? = null
 
+    val hostId: String = vn.xocdiaoffline.app.Stats.shortId(ctx)
+
     private val botNames = listOf("Máy Tuấn", "Máy Lan", "Máy Hùng", "Máy Mai", "Máy Dũng", "Máy Hoa")
 
     init {
@@ -141,6 +143,12 @@ class HostTable(
 
     private fun handleRemote(c: Conn, o: JSONObject) {
         when (o.optString("t")) {
+            // Khách hỏi "máy này có phải bàn đang mời tôi không" (dò qua Bluetooth)
+            "whois" -> {
+                c.send(JSONObject().put("t", "iam").put("hostId", hostId).put("game", gameId))
+                pendingConns.remove(c)
+                mainHandler.postDelayed({ c.close() }, 1500)
+            }
             "hello" -> {
                 if (seatOf(c) >= 0) return
                 if (o.optString("game") != gameId) {
@@ -200,6 +208,7 @@ class HostTable(
             .put("players", seats.count { it.kind == SeatKind.LOCAL || it.kind == SeatKind.REMOTE })
             .put("max", seats.size)
             .put("bt", if (bt != null) (btName ?: "") else "")
+            .put("hostId", hostId)
             .toString()
     }
 
