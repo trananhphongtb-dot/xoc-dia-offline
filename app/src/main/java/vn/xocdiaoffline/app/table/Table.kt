@@ -31,7 +31,7 @@ fun act(name: String, vararg kv: Pair<String, Any>) = JSONObject().apply {
 
 object GameInfo {
     val ALL = listOf("xocdia", "baucua", "tienlen", "phom", "lieng", "bacay")
-    val READY = setOf("tienlen", "lieng", "bacay")
+    val READY = setOf("xocdia", "baucua", "tienlen", "phom", "lieng", "bacay")
     fun title(id: String) = when (id) {
         "tienlen" -> "Tiến lên miền Nam"
         "phom" -> "Phỏm"
@@ -321,6 +321,8 @@ class HostTable(
         val e = when (gameId) {
             "lieng" -> LiengEngine(this, players)
             "bacay" -> BaCayEngine(this, players)
+            "phom" -> vn.xocdiaoffline.app.phom.PhomEngine(this, players)
+            "xocdia", "baucua" -> vn.xocdiaoffline.app.bet.BetEngine(this, players, gameId)
             else -> TLEngine(this, players)
         }
         engine = e
@@ -346,7 +348,7 @@ class HostTable(
         val e = engine
         if (e != null && phase != "lobby") {
             val gv = e.view(v)
-            gv.put("left", if (deadline > 0) (deadline - System.currentTimeMillis()).coerceAtLeast(0) else -1)
+            if (!gv.has("left")) gv.put("left", if (deadline > 0) (deadline - System.currentTimeMillis()).coerceAtLeast(0) else -1)
             if (gv.has("eventId")) gv.put("eventId", gameNo * 10000 + gv.optInt("eventId"))
             result?.let { gv.put("result", it) }
             o.put("g", gv)

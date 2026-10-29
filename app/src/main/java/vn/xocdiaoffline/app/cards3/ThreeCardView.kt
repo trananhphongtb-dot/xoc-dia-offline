@@ -40,11 +40,32 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
     private val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val bold = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
 
+    // Hiệu ứng chia bài: chạy một lần mỗi ván, khi bài vừa được chia
+    private var dealtGame = -1
+    private var dealAt = 0L
+    // Lật bài: nhớ ai đã ngửa bài để lật có hiệu ứng
+    private val revealedAt = HashMap<Int, Long>()
+
     override fun setState(s: JSONObject) {
+        val now = System.currentTimeMillis()
+        val g = s.optJSONObject("g")
+        val gameNo = s.optInt("gameNo")
+        if (g != null) {
+            val info = g.optJSONArray("info") ?: JSONArray()
+            val hasCards = (0 until info.length()).any { val o = info.getJSONObject(it); o.optBoolean("hidden") || (o.optJSONArray("cards")?.length() ?: 0) > 0 }
+            if (hasCards && dealtGame != gameNo) { dealtGame = gameNo; dealAt = now; revealedAt.clear() }
+            if (dealtGame == gameNo) for (i in 0 until info.length()) {
+                val o = info.getJSONObject(i)
+                val seat = o.optInt("seat")
+                if ((o.optJSONArray("cards")?.length() ?: 0) == 3 && seat != s.optInt("me") && seat !in revealedAt) revealedAt[seat] = now
+            }
+        }
         state = s
-        stateAt = System.currentTimeMillis()
+        stateAt = now
         invalidate()
     }
+
+    private val dealing get() = System.currentTimeMillis() - dealAt < 1100
 
     private fun JSONArray?.ints(): List<Int> = if (this == null) emptyList() else (0 until length()).map { getInt(it) }
 
@@ -74,13 +95,19 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
             dp(84f) to h * 0.45f,       // 4 trái dưới
         )
         val slots = when (n) { 2 -> listOf(2); 3 -> listOf(1, 3); 4 -> listOf(0, 2, 4); 5 -> listOf(0, 1, 3, 4); else -> listOf(0, 1, 2, 3, 4) }
+        val deal = dealing
+        if (deal) postInvalidateDelayed(16)
+        val targets = mutableListOf<Pair<Float, Float>>()
         for (k in 1 until n) {
             val p = (myIdx + k) % n
             val seat = players[p]
             val inf = info.optJSONObject(p) ?: continue
             val (x, y) = all[slots[k - 1]]
-            drawOpponent(c, x, y, seats.getJSONObject(seat), inf, seat == turn, if (seat == turn) leftMs else -1, slots[k - 1])
+            targets += x to y
+            drawOpponent(c, x, y, seats.getJSONObject(seat), inf, seat == turn, if (seat == turn) leftMs else -1, slots[k - 1], deal,
+                revealedAt[seat])
         }
+        targets += w * 0.40f to h - h * 0.15f
 
         // Giữa bàn
         label(c, g.optString("center"), w / 2f, h * 0.43f, dp(20f), Ui.GOLD, true)
@@ -99,7 +126,7 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
         val startX = myCx - (cw + gap * 2) / 2f
         if (myInf != null) {
             val cards = myInf.optJSONArray("cards").ints()
-            for (i in 0 until 3) {
+            if (!deal) for (i in 0 until 3) {
                 val x = startX + gap * i
                 if (cards.size == 3) drawFace(c, x, baseY, cw, ch, cards[i], !myInf.optBoolean("active", true))
                 else if (myInf.optBoolean("hidden")) drawBack(c, x, baseY, cw, ch)
@@ -137,6 +164,20 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
             c.drawRoundRect(RectF(dp(14f), infoY - dp(30f), dp(134f), infoY - dp(24f)), dp(3f), dp(3f), fill)
             fill.color = if (frac < 0.3f) Ui.RED else Ui.GOLD
             c.drawRoundRect(RectF(dp(14f), infoY - dp(30f), dp(14f) + dp(120f) * frac, infoY - dp(24f)), dp(3f), dp(3f), fill)
+        }
+
+        // Chia bài: 3 vòng, mỗi người 1 lá mỗi vòng
+        if (deal) {
+            val el = System.currentTimeMillis() - dealAt
+            var k = 0
+            for (round in 0 until 3) for ((tx, ty) in targets) {
+                val tt = (el - k * 40L) / 280f; k++
+                if (tt < 0f || tt >= 1f) continue
+                val e = vn.xocdiaoffline.app.ui.Painter.ease(tt)
+                val x = w / 2f + (tx - w / 2f) * e; val y = h * 0.42f + (ty - h * 0.42f) * e
+                drawBack(c, x - dp(14f), y - dp(20f), dp(28f), dp(40f))
+            }
+            drawBack(c, w / 2f - dp(20f), h * 0.42f - dp(28f), dp(40f), dp(56f))
         }
 
         // Nút thao tác (cột bên phải, xếp từ dưới lên)
@@ -195,7 +236,7 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
     }
 
     private fun drawOpponent(c: Canvas, x: Float, y: Float, sj: JSONObject, inf: JSONObject,
-                             isTurn: Boolean, leftMs: Long, slot: Int) {
+                             isTurn: Boolean, leftMs: Long, slot: Int, deal: Boolean = false, revealAt: Long? = null) {
         val r = dp(22f)
         val active = inf.optBoolean("active", true)
         fill.color = if (active) Color.parseColor("#1E3A2C") else Color.parseColor("#33263238")
@@ -221,7 +262,17 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
         val total = cww + gp * 2
         val cx = if (slot == 0 || slot == 1) x - r - dp(10f) - total else x + r + dp(10f)
         val cy = y - chh / 2
-        if (cards.size == 3) for (i in 0 until 3) drawFace(c, cx + gp * i, cy, cww, chh, cards[i], false)
+        if (deal) { /* đang chia bài */ }
+        else if (cards.size == 3) {
+            // Lật bài: co lá theo chiều ngang rồi mở ra mặt ngửa
+            val t = revealAt?.let { (System.currentTimeMillis() - it) / 420f } ?: 1f
+            if (t < 1f) postInvalidateDelayed(16)
+            for (i in 0 until 3) {
+                val sx = cx + gp * i
+                if (t < 0.5f) { val k = 1f - t * 2; drawBack(c, sx + cww * (1 - k) / 2, cy, cww * k, chh) }
+                else { val k = if (t >= 1f) 1f else (t - 0.5f) * 2; drawFace(c, sx + cww * (1 - k) / 2, cy, cww * k, chh, cards[i], false) }
+            }
+        }
         else if (inf.optBoolean("hidden")) for (i in 0 until 3) drawBack(c, cx + gp * i, cy, cww, chh)
         val desc = inf.optString("desc")
         if (desc.isNotEmpty()) {

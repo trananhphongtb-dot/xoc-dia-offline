@@ -21,6 +21,8 @@ interface EngineHost {
     fun toastAll(msg: String)
     /** Ván kết thúc: delta xu theo chỉ số ghế (tổng bằng 0), kèm bảng kết quả. */
     fun finish(delta: LongArray, result: JSONObject)
+    /** Đồng hồ của bàn (để kiểm thử có thể tua nhanh). */
+    fun now(): Long = System.currentTimeMillis()
 }
 
 /** Một ván của một game, chạy trên máy chủ bàn. players = các ghế tham gia ván. */

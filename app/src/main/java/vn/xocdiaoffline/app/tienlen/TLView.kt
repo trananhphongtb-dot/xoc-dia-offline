@@ -32,6 +32,12 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
     private var eventText = ""
     private var eventAt = 0L
     private var showBoard = false
+    // Hiệu ứng: chia bài khi ván mới, bài bay ra giữa bàn khi có người đánh
+    private var lastGameNo = -1
+    private var dealAt = 0L
+    private var lastSig = ""
+    private var playAt = 0L
+    private var playBy = -1
 
     private class Hit(val rect: RectF, val action: () -> Unit)
     private val hits = mutableListOf<Hit>()
@@ -49,6 +55,15 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
         if (g != null) {
             val hand = g.optJSONArray("hand").toIntList().toSet()
             selected.retainAll(hand)
+            val now = System.currentTimeMillis()
+            val gameNo = s.optInt("gameNo")
+            if (gameNo != lastGameNo) { lastGameNo = gameNo; dealAt = now; lastSig = "" }
+            val last = g.optJSONObject("last")
+            val sig = last?.let { it.optInt("by").toString() + ":" + it.optJSONArray("cards").toString() } ?: ""
+            if (sig != lastSig) {
+                if (sig.isNotEmpty()) { playAt = now; playBy = last!!.optInt("by") }
+                lastSig = sig
+            }
             val eid = g.optInt("eventId", -1)
             if (eid != lastEventId) {
                 lastEventId = eid
@@ -81,6 +96,10 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
         val n = players.size
         val myIdx = players.indexOf(me).coerceAtLeast(0)
         val slots = when (n) { 2 -> listOf(2); 3 -> listOf(1, 3); else -> listOf(1, 2, 3) }
+        val now = System.currentTimeMillis()
+        val dealing = result == null && now - dealAt < 1500
+        val seatPos = HashMap<Int, Pair<Float, Float>>()
+        seatPos[me] = w / 2f to h - h * 0.15f
         for (k in 1 until n) {
             val seat = players[(myIdx + k) % n]
             val (x, y) = when (slots[k - 1]) {
@@ -88,6 +107,7 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
                 2 -> w / 2f to dp(58f)
                 else -> dp(78f) to h * 0.40f
             }
+            seatPos[seat] = x to y
             val sj = seats.getJSONObject(seat)
             drawPlayer(c, x, y, sj.optString("name"), sj.optLong("xu"), counts[(myIdx + k) % n],
                 seat == turn, seat in passed, if (seat == turn) leftMs else -1, result == null, slots[k - 1])
@@ -101,7 +121,15 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
             val total = cw + gap * (cards.size - 1)
             var x = w / 2f - total / 2f
             val y = h * 0.47f - ch / 2f
-            for (card in cards) { drawCard(c, x, y, cw, ch, card, false, false); x += gap }
+            val t = (now - playAt) / 320f
+            val (fx, fy) = seatPos[playBy] ?: (w / 2f to y)
+            val e = if (t < 1f) vn.xocdiaoffline.app.ui.Painter.ease(t) else 1f
+            if (t < 1f) postInvalidateDelayed(16)
+            for (card in cards) {
+                val ax = fx - cw / 2 + (x - (fx - cw / 2)) * e
+                val ay = fy - ch / 2 + (y - (fy - ch / 2)) * e
+                drawCard(c, ax, ay, cw, ch, card, false, false); x += gap
+            }
             val by = seats.getJSONObject(last.optInt("by")).optString("name")
             label(c, "$by · ${last.optString("desc")}", w / 2f, y - dp(8f), dp(13f), Ui.MUTED, true)
         } ?: run {
@@ -128,7 +156,22 @@ class TLView(ctx: Context, private val onAction: (JSONObject) -> Unit, private v
         val must = g.optInt("must", -1)
         val myTurn = turn == me && result == null
         val ch = h * 0.25f; val cw = ch * 0.7f
-        if (hand.isNotEmpty()) {
+        if (dealing) {
+            // Chia bài: lá úp bay từ giữa bàn tới từng người, mỗi người 13 lá
+            postInvalidateDelayed(16)
+            val el = now - dealAt
+            var k = 0
+            for (round in 0 until 13) for (seat in players) {
+                val start = k * 22L; k++
+                val tt = (el - start) / 260f
+                if (tt < 0f || tt >= 1f) continue
+                val (tx, ty) = seatPos[seat] ?: continue
+                val e = vn.xocdiaoffline.app.ui.Painter.ease(tt)
+                val x = w / 2f + (tx - w / 2f) * e; val y = h * 0.45f + (ty - h * 0.45f) * e
+                drawBack(c, x - dp(13f), y - dp(19f), dp(26f), dp(38f))
+            }
+            drawBack(c, w / 2f - dp(20f), h * 0.45f - dp(28f), dp(40f), dp(56f))
+        } else if (hand.isNotEmpty()) {
             val maxW = w * 0.9f
             val gap = if (hand.size > 1) minOf(cw * 0.66f, (maxW - cw) / (hand.size - 1)) else 0f
             val total = cw + gap * (hand.size - 1)
