@@ -45,6 +45,9 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
     private var dealAt = 0L
     // Lật bài: nhớ ai đã ngửa bài để lật có hiệu ứng
     private val revealedAt = HashMap<Int, Long>()
+    private var lastEventId = -1
+    private var eventText = ""
+    private var eventAt = 0L
 
     override fun setState(s: JSONObject) {
         val now = System.currentTimeMillis()
@@ -58,6 +61,14 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
                 val o = info.getJSONObject(i)
                 val seat = o.optInt("seat")
                 if ((o.optJSONArray("cards")?.length() ?: 0) == 3 && seat != s.optInt("me") && seat !in revealedAt) revealedAt[seat] = now
+            }
+        }
+        if (g != null) {
+            val eid = g.optInt("eventId", -1)
+            if (eid != lastEventId) {
+                lastEventId = eid
+                val e = g.optString("event")
+                if (e.isNotEmpty()) { eventText = e; eventAt = now }
             }
         }
         state = s
@@ -164,6 +175,32 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
             c.drawRoundRect(RectF(dp(14f), infoY - dp(30f), dp(134f), infoY - dp(24f)), dp(3f), dp(3f), fill)
             fill.color = if (frac < 0.3f) Ui.RED else Ui.GOLD
             c.drawRoundRect(RectF(dp(14f), infoY - dp(30f), dp(14f) + dp(120f) * frac, infoY - dp(24f)), dp(3f), dp(3f), fill)
+        }
+
+        // Nhật ký hành động (Liêng)
+        val log = g.optJSONArray("log")
+        if (log != null && log.length() > 0 && result == null) {
+            val lx = dp(12f); var ly = dp(62f)
+            fill.color = Color.parseColor("#88000000")
+            c.drawRoundRect(RectF(lx - dp(4f), ly - dp(14f), lx + dp(156f), ly + dp(15f) * (log.length() - 1) + dp(6f)), dp(8f), dp(8f), fill)
+            for (i in 0 until log.length()) {
+                val last = i == log.length() - 1
+                txt.textAlign = Paint.Align.LEFT; txt.textSize = dp(11f); txt.typeface = if (last) bold else Typeface.DEFAULT
+                txt.color = if (last) Ui.GOLD else Color.WHITE
+                c.drawText(log.getString(i), lx, ly, txt)
+                ly += dp(15f)
+            }
+        }
+        // Hành động mới nhất: chữ to giữa bàn
+        if (eventText.isNotEmpty() && System.currentTimeMillis() - eventAt < 2200 && result == null) {
+            val big = eventText.contains("TỐ") || eventText.contains("TẤT TAY")
+            txt.textSize = dp(if (big) 22f else 18f); txt.typeface = bold
+            val tw = txt.measureText(eventText)
+            val ty = h * 0.30f
+            fill.color = if (big) Color.parseColor("#E6B71C1C") else Color.parseColor("#CC000000")
+            c.drawRoundRect(RectF(w / 2 - tw / 2 - dp(16f), ty - txt.textSize - dp(6f), w / 2 + tw / 2 + dp(16f), ty + dp(10f)), dp(12f), dp(12f), fill)
+            label(c, eventText, w / 2f, ty, txt.textSize, if (big) Ui.GOLD else Color.WHITE, true)
+            postInvalidateDelayed(100)
         }
 
         // Chia bài: 3 vòng, mỗi người 1 lá mỗi vòng
@@ -287,14 +324,18 @@ class ThreeCardView(ctx: Context, private val onAction: (JSONObject) -> Unit, pr
 
         val badge = inf.optString("badge")
         if (badge.isNotEmpty()) {
-            txt.textSize = dp(11f); txt.typeface = bold
-            val bw = txt.measureText(badge) + dp(14f)
-            fill.color = when (badge) {
-                "Nhà cái" -> Color.parseColor("#E6B71C1C"); "Úp" -> Color.parseColor("#CC37474F")
-                "Tất tay" -> Color.parseColor("#E6E65100"); else -> Color.parseColor("#CC0D47A1")
+            txt.textSize = dp(13f); txt.typeface = bold
+            val bw = txt.measureText(badge) + dp(16f)
+            fill.color = when {
+                badge == "Nhà cái" -> Color.parseColor("#E6B71C1C")
+                badge.startsWith("Úp") -> Color.parseColor("#CC37474F")
+                badge.startsWith("Tất tay") -> Color.parseColor("#E6E65100")
+                badge.startsWith("Tố") -> Color.parseColor("#E6C62828")
+                badge.startsWith("Theo") -> Color.parseColor("#E62E7D32")
+                else -> Color.parseColor("#CC0D47A1")
             }
-            c.drawRoundRect(RectF(x - bw / 2, y - r - dp(20f), x + bw / 2, y - r - dp(3f)), dp(8f), dp(8f), fill)
-            label(c, badge, x, y - r - dp(7f), dp(11f), Color.WHITE, true)
+            c.drawRoundRect(RectF(x - bw / 2, y - r - dp(24f), x + bw / 2, y - r - dp(4f)), dp(9f), dp(9f), fill)
+            label(c, badge, x, y - r - dp(9f), dp(13f), Color.WHITE, true)
         }
     }
 

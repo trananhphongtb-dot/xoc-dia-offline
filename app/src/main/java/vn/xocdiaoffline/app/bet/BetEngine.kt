@@ -84,6 +84,9 @@ class BetEngine(host: EngineHost, players: IntArray, private val kind: String) :
     private var shakeId = 0
     private val BET_MS = 20_000L
     private val key = "dealer_$kind"
+    /** Các lần đặt gần nhất (ghế, cửa, xu) để máy khách vẽ chip bay vào ô. */
+    private val chipLog = mutableListOf<Triple<Int, Int, Long>>()
+    private var chipSeq = 0
 
     override fun start() {
         val d = host.persist[key] as? Int ?: -1
@@ -130,6 +133,7 @@ class BetEngine(host: EngineHost, players: IntArray, private val kind: String) :
     private fun enterBet() {
         phase = "bet"
         for (b in bets) b.fill(0)
+        chipLog.clear()
         result = BetRules.roll(kind, host.rng)   // đã xóc xong, úp bát chờ mở
         betStart = host.now()
         phaseEnd = betStart + BET_MS
@@ -157,6 +161,9 @@ class BetEngine(host: EngineHost, players: IntArray, private val kind: String) :
         val left = host.xu(players[p]) - bets[p].sum()
         if (left < amt) return "Không đủ xu để đặt thêm"
         bets[p][d] += amt
+        chipLog += Triple(players[p], d, amt)
+        if (chipLog.size > 40) chipLog.removeAt(0)
+        chipSeq++
         return null
     }
 
@@ -202,7 +209,7 @@ class BetEngine(host: EngineHost, players: IntArray, private val kind: String) :
             "takeDealer" -> if (phase == "dealer") {
                 if (host.xu(seat) <= 0) host.toast(seat, "Bạn hết xu, không làm cái được") else setDealer(p)
             }
-            "bet" -> {
+            "place" -> {
                 val err = place(p, a.optLong("v").toInt(), a.optLong("amt"))
                 if (err != null) host.toast(seat, err) else host.changed()
             }
@@ -236,6 +243,10 @@ class BetEngine(host: EngineHost, players: IntArray, private val kind: String) :
                 .put("win", if (phase == "reveal" || phase == "done") BetRules.hits(kind, d, result) else 0))
         }
         gv.put("doors", ds)
+        gv.put("chipSeq", chipSeq)
+        val cl = JSONArray()
+        for ((seat, d, amt) in chipLog) cl.put(JSONArray().put(seat).put(d).put(amt))
+        gv.put("chips", cl)
         if (phase == "reveal" || phase == "done") { gv.put("result", JSONArray(result)); gv.put("resultText", BetRules.resultText(kind, result)) }
         val info = JSONArray()
         for (p in players.indices) info.put(JSONObject().put("seat", players[p]).put("bet", bets[p].sum()))

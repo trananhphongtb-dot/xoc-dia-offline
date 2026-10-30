@@ -62,6 +62,10 @@ class LiengGame(val n: Int, val ante: Long, stacks: LongArray, starter: Int, rng
     var over = false
     var foldWin = false
     val lastAction = Array(n) { "" }
+    /** Nhật ký hành động: (người, chữ hiển thị). */
+    val log = mutableListOf<Pair<Int, String>>()
+    private fun fmt(v: Long) = vn.xocdiaoffline.app.Wallet.fmt(v)
+    private fun record(p: Int, s: String) { lastAction[p] = s; log += p to s }
 
     init {
         val deck = C3.deck(); deck.shuffle(rng)
@@ -94,7 +98,7 @@ class LiengGame(val n: Int, val ante: Long, stacks: LongArray, starter: Int, rng
 
     fun fold(p: Int): String? {
         if (over || p != turn) return "Chưa tới lượt bạn"
-        folded[p] = true; lastAction[p] = "Úp"
+        folded[p] = true; record(p, "Úp bỏ")
         pending.remove(p)
         checkEnd(p); return null
     }
@@ -103,8 +107,9 @@ class LiengGame(val n: Int, val ante: Long, stacks: LongArray, starter: Int, rng
     fun call(p: Int): String? {
         if (over || p != turn) return "Chưa tới lượt bạn"
         val tc = toCall(p)
+        val before = stack[p]
         put(p, tc)
-        lastAction[p] = when { allIn[p] -> "Tất tay"; tc == 0L -> "Xem"; else -> "Theo" }
+        record(p, when { allIn[p] -> "Tất tay ${fmt(before)}"; tc == 0L -> "Xem"; else -> "Theo ${fmt(tc)}" })
         pending.remove(p)
         checkEnd(p); return null
     }
@@ -118,15 +123,16 @@ class LiengGame(val n: Int, val ante: Long, stacks: LongArray, starter: Int, rng
         put(p, need)
         currentBet = contrib[p]
         raises++
-        lastAction[p] = "Tố"
+        record(p, "Tố +${fmt(amount)}")
         reopen(p)
         checkEnd(p); return null
     }
 
     fun allInMove(p: Int): String? {
         if (over || p != turn) return "Chưa tới lượt bạn"
-        put(p, stack[p])
-        lastAction[p] = "Tất tay"
+        val all = stack[p]
+        put(p, all)
+        record(p, "Tất tay ${fmt(all)}")
         if (contrib[p] > currentBet) { currentBet = contrib[p]; raises++; reopen(p) } else pending.remove(p)
         checkEnd(p); return null
     }

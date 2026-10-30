@@ -17,6 +17,20 @@ object Wallet {
     fun name(ctx: Context): String = p(ctx).getString("name", null) ?: "Người chơi"
     fun setName(ctx: Context, v: String) = p(ctx).edit().putString("name", v).apply()
 
+    /** Thêm xu theo mức tự chọn, ghi vào lịch sử xu (giữ 100 lần gần nhất). */
+    fun addXu(ctx: Context, v: Long) {
+        add(ctx, v)
+        val arr = try { org.json.JSONArray(p(ctx).getString("addLog", "[]")) } catch (_: Exception) { org.json.JSONArray() }
+        val list = mutableListOf(org.json.JSONObject().put("t", System.currentTimeMillis()).put("v", v).put("after", xu(ctx)))
+        for (i in 0 until minOf(arr.length(), 99)) list += arr.getJSONObject(i)
+        p(ctx).edit().putString("addLog", org.json.JSONArray(list).toString()).apply()
+    }
+
+    fun addLog(ctx: Context): List<org.json.JSONObject> {
+        val arr = try { org.json.JSONArray(p(ctx).getString("addLog", "[]")) } catch (_: Exception) { org.json.JSONArray() }
+        return (0 until arr.length()).map { arr.getJSONObject(it) }
+    }
+
     /** Nhận xu miễn phí khi còn dưới 1.000 xu. Trả về true nếu nhận được. */
     fun claim(ctx: Context): Boolean {
         if (xu(ctx) >= CLAIM_BELOW) return false

@@ -11,9 +11,10 @@ class Transfer(val from: Int, val to: Int, val amount: Long, val note: String)
  *  - Các ván sau: người thắng ván trước đi trước.
  *  - Đã bỏ lượt thì không được đánh lại trong vòng đó.
  *  - Người đầu tiên hết bài thắng, ván kết thúc ngay.
- *  - Người thua trả 1 cược, cóng (chưa đánh lá nào) trả 2 cược, cộng thêm thối heo/hàng.
+ *  - Tính tiền đếm lá (mức cược = tiền 1 lá): thua trả số lá còn lại, cóng trả 26 lá,
+ *    cộng thêm thối heo/hàng (heo đen 5, heo đỏ 10, 3 đôi thông 5, tứ quý 10, 4 đôi thông 15 lá).
  *  - Chặt heo/hàng: người bị chặt cuối cùng đền cho người chặt (chặt chồng thì cộng dồn).
- *  - Tới trắng: mỗi người còn lại trả 2 cược.
+ *  - Tới trắng: mỗi người còn lại trả 13 lá.
  */
 class TLGame(val n: Int, val bet: Long, starterHint: Int, rng: Random = Random.Default) {
     val hands = Array(n) { mutableListOf<Int>() }
@@ -50,7 +51,7 @@ class TLGame(val n: Int, val bet: Long, starterHint: Int, rng: Random = Random.D
                 winner = i
                 winReason = "Tới trắng: $r"
                 for (q in 0 until n) if (q != i) {
-                    transfers += Transfer(q, i, bet * 2, "Thua tới trắng")
+                    transfers += Transfer(q, i, bet * TLRules.TOI_TRANG_LA, "Thua tới trắng")
                     notes[q] += "Thua tới trắng"
                 }
                 notes[i] += "Tới trắng ($r)"
@@ -146,10 +147,11 @@ class TLGame(val n: Int, val bet: Long, starterHint: Int, rng: Random = Random.D
         for (q in 0 until n) {
             if (q == winner) continue
             val cong = !playedAny[q]
-            val base = if (cong) bet * 2 else bet
+            val la = if (cong) TLRules.CONG_LA else hands[q].size
+            val base = bet * la
             val (thoi, thoiText) = TLRules.thoi(hands[q], bet)
             val note = buildString {
-                append(if (cong) "Cóng" else "Thua")
+                append(if (cong) "Cóng ($la lá)" else "Thua, còn $la lá")
                 if (thoiText.isNotEmpty()) append(", ").append(thoiText)
             }
             transfers += Transfer(q, winner, base + thoi, note)

@@ -172,22 +172,20 @@ class MainActivity : Activity() {
         startPresence()
         val root = Ui.row(this)
         feltBackground(root)
-        val pad = Ui.dp(this, 20)
+        val pad = Ui.dp(this, 14)
         root.setPadding(pad, pad, pad, pad)
 
-        // Cột trái: tên, xu
+        // Cột trái: tên, xu (cuộn được để máy màn hình thấp vẫn thấy đủ nút)
         val left = Ui.col(this).apply { gravity = Gravity.CENTER_HORIZONTAL }
-        left.addView(Ui.text(this, "XÓC ĐĨA", 34f, Ui.GOLD, true).apply { gravity = Gravity.CENTER })
-        left.addView(Ui.text(this, "OFFLINE", 18f, Color.WHITE, true).apply { gravity = Gravity.CENTER; letterSpacing = 0.4f })
-        left.addView(Ui.text(this, "Chơi cùng bạn bè qua Wi‑Fi hoặc Bluetooth, không cần mạng", 12f, Ui.MUTED).apply {
-            gravity = Gravity.CENTER; setPadding(0, Ui.dp(this@MainActivity, 4), 0, Ui.dp(this@MainActivity, 14))
-        })
-        left.addView(Ui.text(this, "Tên của bạn", 13f, Ui.MUTED))
+        left.addView(Ui.text(this, "XÓC ĐĨA", 28f, Ui.GOLD, true).apply { gravity = Gravity.CENTER })
+        left.addView(Ui.text(this, "OFFLINE", 14f, Color.WHITE, true).apply { gravity = Gravity.CENTER; letterSpacing = 0.4f })
+        val nameRow = Ui.row(this).apply { setPadding(0, Ui.dp(this@MainActivity, 8), 0, 0) }
+        nameRow.addView(Ui.text(this, "Tên ", 14f, Ui.MUTED))
         val nameEdit = EditText(this).apply {
-            setText(Wallet.name(this@MainActivity)); setTextColor(Color.WHITE); textSize = 17f
+            setText(Wallet.name(this@MainActivity)); setTextColor(Color.WHITE); textSize = 16f
             filters = arrayOf(InputFilter.LengthFilter(15)); setSingleLine()
             background = Ui.rounded(Color.parseColor("#33000000"), Ui.dp(this@MainActivity, 10).toFloat())
-            val p = Ui.dp(this@MainActivity, 10); setPadding(p, p, p, p)
+            val p = Ui.dp(this@MainActivity, 8); setPadding(p, p, p, p)
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -196,24 +194,21 @@ class MainActivity : Activity() {
                 }
             })
         }
-        left.addView(nameEdit, Ui.lp(Ui.MATCH, Ui.WRAP))
-        left.addView(Ui.spacer(this, 14))
-        val xuText = Ui.text(this, "", 22f, Ui.GOLD, true).apply { gravity = Gravity.CENTER }
+        nameRow.addView(nameEdit, Ui.lp(0, Ui.WRAP, 1f))
+        left.addView(nameRow, Ui.lp(Ui.MATCH, Ui.WRAP))
+        val xuText = Ui.text(this, "", 21f, Ui.GOLD, true).apply { gravity = Gravity.CENTER; setPadding(0, Ui.dp(this@MainActivity, 6), 0, Ui.dp(this@MainActivity, 4)) }
         fun refreshXu() { xuText.text = "💰 ${Wallet.fmt(Wallet.xu(this))} xu" }
         refreshXu()
         left.addView(xuText, Ui.lp(Ui.MATCH, Ui.WRAP))
-        left.addView(Ui.spacer(this, 8))
-        left.addView(Ui.button(this, "Nhận xu miễn phí", Color.parseColor("#2E7D32"), Color.WHITE, 15f) {
-            if (Wallet.claim(this)) { toast("Đã nhận, ví của bạn có ${Wallet.fmt(Wallet.START_XU)} xu"); refreshXu() }
-            else toast("Khi còn dưới ${Wallet.fmt(Wallet.CLAIM_BELOW)} xu mới nhận được")
-        }, Ui.lp(Ui.MATCH, Ui.WRAP))
-        left.addView(Ui.spacer(this, 8))
-        left.addView(Ui.button(this, "📊 Thành tích của bạn", Color.parseColor("#33FFFFFF"), Color.WHITE, 15f) { showStats() }, Ui.lp(Ui.MATCH, Ui.WRAP))
-        left.addView(Ui.spacer(this, 6))
-        left.addView(Ui.button(this, "🗂 Lịch sử bàn", Color.parseColor("#33FFFFFF"), Color.WHITE, 15f) { showHistory() }, Ui.lp(Ui.MATCH, Ui.WRAP))
-        left.addView(Ui.spacer(this, 10))
-        left.addView(Ui.text(this, "Xu chỉ để chơi cho vui, không có giá trị quy đổi.", 11f, Ui.MUTED).apply { gravity = Gravity.CENTER })
-        root.addView(left, Ui.lp(0, Ui.MATCH, 0.9f))
+        left.addView(Ui.button(this, "➕ Thêm xu", Color.parseColor("#2E7D32"), Color.WHITE, 15f) { showAddXu { refreshXu() } }, Ui.lp(Ui.MATCH, Ui.WRAP))
+        val row2 = Ui.row(this)
+        row2.addView(Ui.button(this, "📊 Thành tích", Color.parseColor("#33FFFFFF"), Color.WHITE, 14f) { showStats() }, Ui.lp(0, Ui.WRAP, 1f).apply { rightMargin = Ui.dp(this@MainActivity, 4) })
+        row2.addView(Ui.button(this, "🗂 Lịch sử", Color.parseColor("#33FFFFFF"), Color.WHITE, 14f) { showHistory() }, Ui.lp(0, Ui.WRAP, 1f).apply { leftMargin = Ui.dp(this@MainActivity, 4) })
+        left.addView(row2, Ui.lp(Ui.MATCH, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 6) })
+        left.addView(Ui.text(this, "Xu chỉ để chơi cho vui, không có giá trị quy đổi.", 10f, Ui.MUTED).apply {
+            gravity = Gravity.CENTER; setPadding(0, Ui.dp(this@MainActivity, 6), 0, 0) })
+        val leftScroll = ScrollView(this).apply { isFillViewport = true; addView(left) }
+        root.addView(leftScroll, Ui.lp(0, Ui.MATCH, 0.9f))
 
         // Cột phải: 6 game
         val grid = Ui.col(this)
@@ -245,6 +240,40 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    /** Thêm xu: tự chọn mức hoặc tự nhập; mỗi lần thêm đều ghi vào lịch sử xu. */
+    private fun showAddXu(after: () -> Unit) {
+        val pad = Ui.dp(this, 18)
+        val box = Ui.col(this).apply { setPadding(pad, pad / 2, pad, 0) }
+        box.addView(Ui.text(this, "Đang có ${Wallet.fmt(Wallet.xu(this))} xu. Chọn mức muốn thêm:", 15f, Color.WHITE))
+        var dlg: AlertDialog? = null
+        fun add(v: Long) {
+            if (v <= 0) { toast("Số xu không hợp lệ"); return }
+            Wallet.addXu(this, v)
+            toast("Đã thêm ${Wallet.fmt(v)} xu")
+            dlg?.dismiss(); after()
+        }
+        val levels = longArrayOf(10_000, 50_000, 100_000, 500_000, 1_000_000)
+        val r1 = Ui.row(this); val r2 = Ui.row(this)
+        for ((i, v) in levels.withIndex()) {
+            (if (i < 3) r1 else r2).addView(Ui.button(this, "+" + Wallet.fmt(v), Ui.GOLD, Color.parseColor("#3A2A00"), 15f) { add(v) },
+                Ui.lp(0, Ui.WRAP, 1f, Ui.dp(this, 4)))
+        }
+        box.addView(r1, Ui.lp(Ui.MATCH, Ui.WRAP)); box.addView(r2, Ui.lp(Ui.MATCH, Ui.WRAP))
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER; hint = "Hoặc tự nhập số xu"; textSize = 16f
+            setTextColor(Color.WHITE); setHintTextColor(Ui.MUTED)
+            filters = arrayOf(InputFilter.LengthFilter(10))
+        }
+        val r3 = Ui.row(this)
+        r3.addView(input, Ui.lp(0, Ui.WRAP, 1f))
+        r3.addView(Ui.button(this, "Thêm", Ui.GOLD, Color.parseColor("#3A2A00"), 15f) { add(input.text.toString().toLongOrNull() ?: 0) })
+        box.addView(r3, Ui.lp(Ui.MATCH, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 6) })
+        dlg = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("➕ Thêm xu")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setNegativeButton("Đóng", null).show()
+    }
+
     private fun showStats() = showRecords(0)
     private fun showHistory() = showRecords(3)
 
@@ -259,14 +288,15 @@ class MainActivity : Activity() {
 
         val header = Ui.row(this)
         header.addView(Ui.button(this, "← Quay lại", Color.parseColor("#55000000"), Color.WHITE, 15f) { showHome() })
-        header.addView(Ui.text(this, "  ${Wallet.name(this)}", 20f, Ui.GOLD, true), Ui.lp(0, Ui.WRAP, 1f))
-        val names = listOf("Hôm nay", "7 ngày", "Tất cả", "🗂 Lịch sử bàn")
+        val tabsRow = Ui.row(this)
+        val names = listOf("Hôm nay", "7 ngày", "Tất cả", "🗂 Lịch sử bàn", "💰 Lịch sử xu")
         for ((i, n) in names.withIndex()) {
             val on = i == tab
-            header.addView(Ui.button(this, n, if (on) Ui.GOLD else Color.parseColor("#33FFFFFF"),
-                if (on) Color.parseColor("#3A2A00") else Color.WHITE, 15f) { showRecords(i) },
+            tabsRow.addView(Ui.button(this, n, if (on) Ui.GOLD else Color.parseColor("#33FFFFFF"),
+                if (on) Color.parseColor("#3A2A00") else Color.WHITE, 14f) { showRecords(i) },
                 Ui.lp(Ui.WRAP, Ui.WRAP).apply { leftMargin = Ui.dp(this@MainActivity, 6) })
         }
+        header.addView(android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(tabsRow) }, Ui.lp(0, Ui.WRAP, 1f))
         root.addView(header)
         root.addView(Ui.spacer(this, 8))
         val scroll = ScrollView(this)
@@ -274,7 +304,21 @@ class MainActivity : Activity() {
         scroll.addView(body)
         root.addView(scroll, Ui.lp(Ui.MATCH, 0, 1f))
 
-        if (tab < 3) {
+        if (tab == 4) {
+            val log = Wallet.addLog(this)
+            body.addView(Ui.text(this, "Đang có ${Wallet.fmt(Wallet.xu(this))} xu  ·  Đã thêm tổng cộng ${Wallet.fmt(log.sumOf { it.optLong("v") })} xu", 17f, Ui.GOLD, true))
+            if (log.isEmpty()) body.addView(Ui.text(this, "Chưa thêm xu lần nào.", 18f, Ui.MUTED))
+            for (e in log) {
+                val row = Ui.row(this).apply {
+                    background = Ui.rounded(Ui.PANEL, Ui.dp(this@MainActivity, 12).toFloat())
+                    val p = Ui.dp(this@MainActivity, 14); setPadding(p, p, p, p)
+                }
+                row.addView(Ui.text(this, History.timeText(e.optLong("t")), 17f, Color.WHITE), Ui.lp(0, Ui.WRAP, 1f))
+                row.addView(Ui.text(this, "+${Wallet.fmt(e.optLong("v"))} xu", 20f, Color.parseColor("#69F0AE"), true))
+                row.addView(Ui.text(this, "   còn ${Wallet.fmt(e.optLong("after"))}", 15f, Ui.MUTED))
+                body.addView(row, Ui.lp(Ui.MATCH, Ui.WRAP).apply { topMargin = Ui.dp(this@MainActivity, 6) })
+            }
+        } else if (tab < 3) {
             // Lưới 6 game, mỗi ô một thẻ số liệu
             for (r in 0 until 2) {
                 val row = Ui.row(this).apply { gravity = Gravity.TOP }

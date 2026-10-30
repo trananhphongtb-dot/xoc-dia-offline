@@ -112,13 +112,16 @@ class PhomView(ctx: Context, private val onAction: (JSONObject) -> Unit, private
         val discPos = HashMap<Int, Pair<Float, Float>>()
         val myHandY = h - h * 0.25f - dp(6f)
         seatPos[me] = w * 0.5f to myHandY
-        discPos[me] = w * 0.22f to h * 0.52f
+        // Bài đã đánh: to, đặt ngay bên phải người đánh (người ngồi bên phải màn hình thì đặt phía trong bàn)
+        val DISC = dp(50f)
+        val discW = DISC * 0.7f + DISC * 0.7f * 0.62f * 3
+        discPos[me] = w * 0.5f + dp(40f) to myHandY - dp(48f) - DISC
         for (k in 1 until n) {
             val seat = players[(myIdx + k) % n]
             when (slotsFor[k - 1]) {
-                1 -> { seatPos[seat] = w - dp(70f) to h * 0.36f; discPos[seat] = w - dp(250f) to h * 0.30f }
-                2 -> { seatPos[seat] = w * 0.5f to dp(48f); discPos[seat] = w * 0.5f - dp(30f) to dp(84f) }
-                else -> { seatPos[seat] = dp(70f) to h * 0.36f; discPos[seat] = dp(140f) to h * 0.30f }
+                1 -> { seatPos[seat] = w - dp(70f) to h * 0.36f; discPos[seat] = w - dp(70f) - dp(64f) - discW to h * 0.36f - DISC / 2 }
+                2 -> { seatPos[seat] = w * 0.5f to dp(48f); discPos[seat] = w * 0.5f + dp(64f) to dp(48f) - DISC / 2 }
+                else -> { seatPos[seat] = dp(70f) to h * 0.36f; discPos[seat] = dp(70f) + dp(64f) to h * 0.36f - DISC / 2 }
             }
         }
         val deckX = w * 0.5f; val deckY = h * 0.43f
@@ -148,7 +151,7 @@ class PhomView(ctx: Context, private val onAction: (JSONObject) -> Unit, private
                     lx += dp(10f)
                 }
             }
-            drawDiscards(c, inf.optJSONArray("discards").ints(), discPos[seat]!!, dp(30f), g.optInt("lastBy") == seat, flyingCard(seat))
+            drawDiscards(c, inf.optJSONArray("discards").ints(), discPos[seat]!!, DISC, g.optInt("lastBy") == seat, flyingCard(seat))
         }
 
         // Nọc bài
@@ -163,7 +166,7 @@ class PhomView(ctx: Context, private val onAction: (JSONObject) -> Unit, private
 
         // Bài đã đánh của mình
         val myInf = info.optJSONObject(myIdx)
-        if (myInf != null) drawDiscards(c, myInf.optJSONArray("discards").ints(), discPos[me]!!, dp(30f), g.optInt("lastBy") == me, flyingCard(me))
+        if (myInf != null) drawDiscards(c, myInf.optJSONArray("discards").ints(), discPos[me]!!, DISC, g.optInt("lastBy") == me, flyingCard(me))
 
         // Bài trên tay
         var hand = g.optJSONArray("hand").ints()
@@ -259,8 +262,8 @@ class PhomView(ctx: Context, private val onAction: (JSONObject) -> Unit, private
         for ((i, card) in ds.withIndex()) {
             if (card == flying && i == ds.size - 1) continue
             val isLast = lastIsHere && i == ds.size - 1
-            P.faceA13(c, x, pos.second - (if (isLast) dp(6f) else 0f), cw, ch, card, sel = isLast)
-            x += cw * 0.55f
+            P.faceA13(c, x, pos.second - (if (isLast) dp(8f) else 0f), cw, ch, card, sel = isLast)
+            x += cw * 0.62f
         }
     }
 

@@ -96,14 +96,28 @@ object TLRules {
     fun isChop(prev: Combo?, nw: Combo): Boolean =
         prev != null && (prev.isHeoCombo || prev.isHang) && nw.isHang
 
-    /** Giá trị đền khi một bộ bị chặt, tính theo mức cược. */
-    fun chopValue(c: Combo, bet: Long): Long = when {
-        c.isHeoCombo -> c.cards.sumOf { if (Cards.isRed(it)) bet else bet / 2 }
-        c.type == CType.PAIRSEQ && c.size == 6 -> bet
-        c.type == CType.QUAD -> bet * 2
-        c.type == CType.PAIRSEQ -> bet * 3
+    /*
+     * Tính tiền kiểu đếm lá: mức cược là tiền cho 1 lá.
+     *  - Thua: mỗi lá còn trên tay 1 lá; cóng: 26 lá.
+     *  - Heo đen 5 lá, heo đỏ 10 lá; 3 đôi thông 5 lá; tứ quý 10 lá; 4 đôi thông 15 lá
+     *    (dùng cho cả thối lẫn bị chặt).
+     *  - Tới trắng: mỗi người 13 lá.
+     */
+    const val CONG_LA = 26
+    const val TOI_TRANG_LA = 13
+    fun heoLa(c: Int) = if (Cards.isRed(c)) 10 else 5
+
+    /** Số lá phải đền khi một bộ bị chặt. */
+    fun chopLa(c: Combo): Int = when {
+        c.isHeoCombo -> c.cards.sumOf { heoLa(it) }
+        c.type == CType.PAIRSEQ && c.size == 6 -> 5
+        c.type == CType.QUAD -> 10
+        c.type == CType.PAIRSEQ -> 15
         else -> 0
     }
+
+    /** Giá trị đền khi một bộ bị chặt, tính theo mức cược (1 lá). */
+    fun chopValue(c: Combo, bet: Long): Long = bet * chopLa(c)
 
     private fun rankCounts(hand: List<Int>): IntArray {
         val cnt = IntArray(16)
@@ -127,26 +141,25 @@ object TLRules {
 
     /** Thối: bài còn lại trên tay người thua có heo hoặc hàng. Trả về (số xu, mô tả). */
     fun thoi(hand: List<Int>, bet: Long): Pair<Long, String> {
-        var total = 0L
+        var la = 0
         val parts = mutableListOf<String>()
         val heo = hand.filter { Cards.isHeo(it) }
-        if (heo.isNotEmpty()) {
-            total += heo.sumOf { if (Cards.isRed(it)) bet else bet / 2 }
-            parts += "${heo.size} heo"
-        }
+        val red = heo.count { Cards.isRed(it) }; val black = heo.size - red
+        if (black > 0) { la += black * 5; parts += "$black heo đen" }
+        if (red > 0) { la += red * 10; parts += "$red heo đỏ" }
         val cnt = rankCounts(hand)
         val quads = (3..14).count { cnt[it] == 4 }
-        if (quads > 0) { total += quads * bet * 2; parts += "$quads tứ quý" }
+        if (quads > 0) { la += quads * 10; parts += "$quads tứ quý" }
         var run = 0
         val runs = mutableListOf<Int>()
         for (r in 3..15) {
             if (r <= 14 && cnt[r] >= 2) run++ else { if (run >= 3) runs += run; run = 0 }
         }
         for (l in runs) {
-            total += if (l >= 4) bet * 3 else bet
+            la += if (l >= 4) 15 else 5
             parts += "$l đôi thông"
         }
-        return total to (if (parts.isEmpty()) "" else "Thối " + parts.joinToString(", "))
+        return bet * la to (if (parts.isEmpty()) "" else "Thối " + parts.joinToString(", ") + " (+$la lá)")
     }
 
     // ------------------------------------------------------------------

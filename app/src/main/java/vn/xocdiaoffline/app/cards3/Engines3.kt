@@ -111,11 +111,7 @@ class LiengEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
         val info = JSONArray()
         for (p in players.indices) {
             val reveal = (p == me) || (g.over && !g.foldWin && !g.folded[p])
-            val badge = when {
-                g.folded[p] -> "Úp"
-                g.allIn[p] -> "Tất tay"
-                else -> g.lastAction[p]
-            }
+            val badge = g.lastAction[p]
             info.put(JSONObject()
                 .put("seat", players[p])
                 .put("cards", if (reveal) JSONArray(g.hands[p]) else JSONArray())
@@ -147,6 +143,13 @@ class LiengEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
         }
         gv.put("actions", acts)
         if (me >= 0) gv.put("myLine", "Còn ${Wallet.fmt(g.stack[me])} xu trên tay")
+        // Hành động mới nhất hiện chữ to giữa bàn + nhật ký 5 dòng
+        g.log.lastOrNull()?.let { (p, t) ->
+            gv.put("event", "${host.name(players[p])}: ${t.uppercase()}").put("eventId", g.log.size)
+        }
+        val lg = JSONArray()
+        for ((p, t) in g.log.takeLast(5)) lg.put("${host.name(players[p])}: $t")
+        gv.put("log", lg)
         return gv
     }
 }
@@ -201,14 +204,30 @@ class BaCayEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
 
     private fun allBet() = players.indices.all { it == dealer || mult[it] > 0 }
 
+    private var lookEnd = 0L
+    private val botFlipAt = LongArray(players.size)
+    private var allFlippedAt = 0L
+
+    /** Chia bài: ai cũng úp, chỉ thấy bài mình. Máy lật vào lúc ngẫu nhiên; hết giờ ai chưa lật thì tự lật. */
     private fun enterLook() {
         phase = "look"
         val deck = C3.deck(); deck.shuffle(host.rng)
         hands = players.indices.map { deck.subList(it * 3, it * 3 + 3).sorted() }
         flipped.fill(false)
-        for (p in players.indices) if (host.isBot(players[p])) flipped[p] = true
-        if (flipped.all { it }) { host.schedule(1500, false) { showdown() }; host.changed(); return }
-        host.schedule(10_000, true) { showdown() }
+        val now = host.now()
+        lookEnd = now + 15_000
+        allFlippedAt = 0
+        for (p in players.indices) botFlipAt[p] = now + 3_000 + host.rng.nextLong(9_000)
+        lookTick()
+    }
+
+    private fun lookTick() {
+        if (phase != "look") return
+        val now = host.now()
+        for (p in players.indices) if (!flipped[p] && host.isBot(players[p]) && now >= botFlipAt[p]) flipped[p] = true
+        if (flipped.all { it } && allFlippedAt == 0L) allFlippedAt = now
+        if (now >= lookEnd || (allFlippedAt > 0 && now - allFlippedAt >= 1_500)) { showdown(); return }
+        host.schedule(500, false) { lookTick() }
         host.changed()
     }
 
@@ -238,7 +257,7 @@ class BaCayEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
         val p = players.indexOf(seat)
         if (p < 0) return
         if (phase == "bet" && p != dealer && mult[p] == 0) { mult[p] = 1; if (allBet()) enterLook() }
-        else if (phase == "look" && !flipped[p]) { flipped[p] = true; if (flipped.all { it }) showdown() }
+        else if (phase == "look" && !flipped[p]) botFlipAt[p] = minOf(botFlipAt[p], host.now() + 1_000)
     }
 
     override fun action(seat: Int, a: JSONObject) {
@@ -253,7 +272,8 @@ class BaCayEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
             }
             "flip" -> if (phase == "look" && p >= 0 && !flipped[p]) {
                 flipped[p] = true
-                if (flipped.all { it }) showdown() else host.changed()
+                host.toastAll("${host.name(seat)} lật bài: ${C3.baCayDesc(hands[p])}")
+                host.changed()
             }
             "quitDealer" -> if (phase == "done" && p >= 0 && p == dealer && host.persist["bcDealer"] == seat) {
                 host.persist.remove("bcDealer")
@@ -292,7 +312,11 @@ class BaCayEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
         when (phase) {
             "dealer" -> { gv.put("center", "Chọn nhà cái"); gv.put("centerSub", "Ai bấm \"Làm cái\" trước sẽ làm cái") }
             "bet" -> { gv.put("center", "Đặt cược"); gv.put("centerSub", "Nhà cái: $dName") }
-            "look" -> { gv.put("center", "Xem bài"); gv.put("centerSub", "Nhà cái: $dName") }
+            "look" -> {
+                gv.put("center", "Xem bài · đã lật ${flipped.count { it }}/${players.size}")
+                gv.put("centerSub", "Nhà cái: $dName · hết giờ sẽ tự lật")
+                gv.put("left", (lookEnd - host.now()).coerceAtLeast(0))
+            }
             else -> { gv.put("center", "Nhà cái: $dName"); gv.put("centerSub", "") }
         }
         val acts = JSONArray()
@@ -302,7 +326,7 @@ class BaCayEngine(host: EngineHost, players: IntArray) : Engine(host, players) {
                 for (m in MULTS) acts.put(actionJ("x$m · ${Wallet.fmt(host.bet * m)}", "stake", m.toLong(), if (m == 1) "gold" else "blue"))
                 gv.put("hint", "Chọn mức cược của bạn")
             } else gv.put("hint", if (me == dealer) "Bạn làm cái, chờ nhà con đặt cược" else "Đã đặt cược, chờ chia bài")
-            "look" -> if (!flipped[me]) { acts.put(actionJ("Lật bài", "flip", 0, "gold")); gv.put("hint", "Xem bài của bạn rồi bấm Lật bài") }
+            "look" -> if (!flipped[me]) { acts.put(actionJ("Lật bài", "flip", 0, "gold")); gv.put("hint", "Chỉ bạn thấy bài này. Bấm Lật bài để mọi người cùng xem") }
                       else gv.put("hint", "Chờ mọi người lật bài")
             "done" -> if (me == dealer && host.persist["bcDealer"] == v) acts.put(actionJ("Bỏ cái", "quitDealer", 0, "red"))
         }

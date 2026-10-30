@@ -39,6 +39,11 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
     private var lastPhase = ""
     private val CHIPS = intArrayOf(1, 2, 5, 10)
 
+    // Hiệu ứng chip: bay từ người đặt vào ô cửa, khi mở bát bay về nhà cái (thua) hoặc về người đặt (thắng)
+    private class ChipFly(val seat: Int, val door: Int, val amt: Long, val start: Long)
+    private val chipFlies = mutableListOf<ChipFly>()
+    private var chipsSeen = 0
+
     private class Hit(val rect: RectF, val action: () -> Unit)
     private val hits = mutableListOf<Hit>()
 
@@ -49,7 +54,15 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
         val now = System.currentTimeMillis()
         if (g != null) {
             val sh = g.optInt("shakeId")
-            if (sh != lastShake) { lastShake = sh; shakeAt = now }
+            if (sh != lastShake) { lastShake = sh; shakeAt = now; chipsSeen = 0; chipFlies.clear() }
+            val chips = g.optJSONArray("chips")
+            val n = chips?.length() ?: 0
+            if (n < chipsSeen) chipsSeen = 0
+            for (i in chipsSeen until n) {
+                val e = chips!!.getJSONArray(i)
+                chipFlies += ChipFly(e.getInt(0), e.getInt(1), e.getLong(2), now + (i - chipsSeen) * 60L)
+            }
+            chipsSeen = n
             val ph = g.optString("phase")
             if (ph == "reveal" && lastPhase != "reveal") revealAt = now
             lastPhase = ph
@@ -82,9 +95,12 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
         val info = g.optJSONArray("info") ?: JSONArray()
         val others = players.filter { it != me }
         val x0 = dp(170f); val x1 = w - dp(170f)
+        val seatPos = HashMap<Int, Pair<Float, Float>>()
+        seatPos[me] = dp(60f) to h - dp(30f)
         for ((k, seat) in others.withIndex()) {
             val x = if (others.size == 1) w / 2 else x0 + (x1 - x0) * k / (others.size - 1)
             val y = dp(32f)
+            seatPos[seat] = x to y
             val sj = seats.getJSONObject(seat)
             P.avatar(c, x, y, dp(16f), sj.optString("name"), true, seat == dealer, -1f)
             P.label(c, sj.optString("name"), x, y + dp(29f), dp(11f), Color.WHITE, true)
@@ -99,7 +115,9 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
         val canBet = phase == "bet" && dealer != me
         val top = dp(84f); val bottom = h - dp(66f)
 
+        val doorRects = HashMap<Int, RectF>()
         fun door(i: Int, r: RectF, big: Boolean, icon: String? = null) {
+            doorRects[i] = r
             val d = doors.optJSONObject(i) ?: return
             val win = showResult && d.optInt("win") > 0
             P.fill.color = if (win) Color.parseColor("#E6F2C14E") else Color.parseColor("#990A2A1C")
@@ -119,7 +137,7 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
                 P.label(c, "Bạn ${Wallet.fmt(mine)}", r.centerX(), r.bottom - dp(6f), dp(11f), if (win) fg else Ui.GOLD, true)
             }
             if (win && kind == "baucua") P.label(c, "x${d.optInt("win")}", r.right - dp(16f), r.top + dp(20f), dp(12f), Color.WHITE, true)
-            if (canBet) hits += Hit(r) { onAction(act("bet", "v" to i, "amt" to s.optLong("bet") * chip)) }
+            if (canBet) hits += Hit(r) { onAction(act("place", "v" to i, "amt" to s.optLong("bet") * chip)) }
         }
 
         if (kind == "xocdia") {
@@ -144,6 +162,9 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
             }
             drawDice(c, (gridR + w) / 2, (top + bottom) / 2, minOf(w - gridR, bottom - top) * 0.42f, resultVals, phase, now, showResult)
         }
+
+        // Chip trên bàn
+        drawChips(c, g, s.optLong("bet"), seatPos, doorRects, dealer, phase, now)
 
         // Giữa: trạng thái / đồng hồ
         val status = when (phase) {
@@ -203,6 +224,68 @@ class BetView(ctx: Context, private val onAction: (JSONObject) -> Unit, private 
 
         if (res != null) result.draw(c, w, h, s, res, acts, { r, fn -> hits += Hit(r, fn) }, onAction)
         if (showBoard) { result.drawBoard(c, w, h, s); hits.clear(); hits += Hit(RectF(0f, 0f, w, h)) { showBoard = false } }
+    }
+
+    private fun chipColor(m: Long) = when {
+        m >= 10 -> Color.parseColor("#6A1B9A"); m >= 5 -> Color.parseColor("#C62828")
+        m >= 2 -> Color.parseColor("#2E7D32"); else -> Color.parseColor("#1565C0")
+    }
+
+    private fun drawChip(c: Canvas, x: Float, y: Float, r: Float, col: Int) {
+        P.fill.color = Color.parseColor("#55000000")
+        c.drawCircle(x + dp(1f), y + dp(1.5f), r, P.fill)
+        P.fill.color = col
+        c.drawCircle(x, y, r, P.fill)
+        P.stroke.color = Color.WHITE; P.stroke.strokeWidth = dp(1.5f)
+        P.stroke.pathEffect = android.graphics.DashPathEffect(floatArrayOf(dp(3f), dp(2.5f)), 0f)
+        c.drawCircle(x, y, r * 0.78f, P.stroke)
+        P.stroke.pathEffect = null
+    }
+
+    /** Vị trí cố định (giả ngẫu nhiên) của chip thứ k trong ô cửa. */
+    private fun spot(r: RectF, k: Int): Pair<Float, Float> {
+        val rx = ((k * 73 + 17) % 100) / 100f; val ry = ((k * 41 + 29) % 100) / 100f
+        return (r.left + dp(16f) + rx * (r.width() - dp(32f))) to (r.top + r.height() * 0.45f + ry * (r.height() * 0.35f))
+    }
+
+    private fun drawChips(c: Canvas, g: JSONObject, bet: Long, seatPos: Map<Int, Pair<Float, Float>>,
+                          doorRects: Map<Int, RectF>, dealer: Int, phase: String, now: Long) {
+        val chips = g.optJSONArray("chips") ?: return
+        val doors = g.optJSONArray("doors") ?: JSONArray()
+        val r0 = dp(9f)
+        val settleStart = revealAt + 1300
+        val settling = phase == "reveal" && now >= settleStart
+        if (phase == "done") return
+        var animating = false
+        for (k in 0 until chips.length()) {
+            val e = chips.getJSONArray(k)
+            val seat = e.getInt(0); val d = e.getInt(1); val amt = e.getLong(2)
+            val rect = doorRects[d] ?: continue
+            val (sx, sy) = spot(rect, k)
+            val col = chipColor(if (bet > 0) amt / bet else 1)
+            val fly = chipFlies.firstOrNull { it.seat == seat && it.door == d && now < it.start + 450 && it.amt == amt }
+            var x = sx; var y = sy
+            if (fly != null) {
+                val t = ((now - fly.start) / 450f).coerceIn(0f, 1f)
+                val (fx, fy) = seatPos[seat] ?: (sx to sy)
+                val ez = Painter.ease(t)
+                x = fx + (sx - fx) * ez; y = fy + (sy - fy) * ez - kotlin.math.sin(t * Math.PI.toFloat()) * dp(30f)
+                animating = true
+            } else if (settling) {
+                val t = ((now - settleStart) / 700f).coerceIn(0f, 1f)
+                val win = (doors.optJSONObject(d)?.optInt("win") ?: 0) > 0
+                val target = if (win) seatPos[seat] else seatPos[dealer]
+                if (target != null) {
+                    val ez = Painter.ease(t)
+                    x = sx + (target.first - sx) * ez; y = sy + (target.second - sy) * ez
+                }
+                if (t >= 1f) continue
+                animating = true
+            }
+            drawChip(c, x, y, r0, col)
+        }
+        chipFlies.removeAll { now > it.start + 500 }
+        if (animating || (phase == "reveal" && now < settleStart + 800)) postInvalidateDelayed(16)
     }
 
     private fun shortXu(v: Long) = if (v >= 1000 && v % 1000 == 0L) "${v / 1000}K" else Wallet.fmt(v)
