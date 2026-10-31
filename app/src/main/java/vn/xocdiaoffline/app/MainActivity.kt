@@ -91,6 +91,7 @@ class MainActivity : Activity() {
         hideBars()
         showHome()
         askBtOnce()
+        registerBack()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -1108,14 +1109,38 @@ class MainActivity : Activity() {
         showHome()
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
+    /** Nút Quay lại: true nếu app tự xử lý, false nếu để hệ thống đóng app. */
+    private fun handleBack(): Boolean {
         when (screen) {
             "table" -> confirmLeave()
             "join", "history" -> showHome()
             "record" -> showRecords(3)
-            else -> @Suppress("DEPRECATION") super.onBackPressed()
+            else -> return false
         }
+        return true
+    }
+
+    // Android 13 trở lên (bắt buộc từ Android 16): nhận nút Quay lại qua OnBackInvokedCallback
+    private var backCallback: Any? = null
+
+    private fun registerBack() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val cb = android.window.OnBackInvokedCallback {
+            if (!handleBack()) { unregisterBack(); finish() }
+        }
+        onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, cb)
+        backCallback = cb
+    }
+
+    private fun unregisterBack() {
+        if (Build.VERSION.SDK_INT < 33) return
+        (backCallback as? android.window.OnBackInvokedCallback)?.let { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(it) }
+        backCallback = null
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (!handleBack()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     override fun onDestroy() {

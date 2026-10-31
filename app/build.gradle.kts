@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "vn.xocdiaoffline.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "vn.xocdiaoffline.app"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 7
-        versionName = "0.3.2"
+        targetSdk = 36
+        versionCode = 8
+        versionName = "0.3.3"
     }
 
     signingConfigs {
