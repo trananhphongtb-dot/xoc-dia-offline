@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -43,6 +46,20 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle :app:bundleRelease --no-daemon
+
+      # Chưa có khóa trong Secrets: build AAB chưa ký, đăng lên mục Releases để ký ở máy khác
+      - name: Build AAB chưa ký
+        if: env.KEYSTORE_FILE == ''
+        run: gradle :app:bundleRelease --no-daemon
+
+      - name: Đăng AAB chưa ký lên Releases
+        if: env.KEYSTORE_FILE == ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: aab-build-${{ github.run_number }}
+          name: AAB chưa ký (build ${{ github.run_number }})
+          prerelease: true
+          files: app/build/outputs/bundle/release/*.aab
 
       - uses: actions/upload-artifact@v4
         with:
